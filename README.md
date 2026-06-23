@@ -10,28 +10,27 @@ Central registry for Cursor skills and slash commands. GitHub is the source of t
 curl -sSL https://raw.githubusercontent.com/SAT-oO/satoo-llm-skills/main/bootstrap.sh | bash
 ```
 
-**2. Cursor Agent — install skills you need:**
+**2. Cursor Agent — install skills globally:**
 
 Run **`/configure-skills`** and pick from the multiselect prompt.
 
-Or name them inline: `/configure-skills ble-hack-skill`
-
-Re-run bootstrap to refresh commands. Re-run `/configure-skills` to refresh skills.
+Or: `/configure-skills ble-hack-skill`
 
 ---
 
-## In your project
+## Skill development in an external project
 
-### Skills live in the project repo
+**First time** — fetch a skill copy into your project to edit:
 
-1. Add a `*-skill/` folder with `SKILL.md`.
-2. Publish changes → **`/commit-skill`**
-3. Get latest from GitHub → **`/pull-skill`**
+Run **`/dev-pull-skill`** and pick skill(s), or: `/dev-pull-skill ble-hack-skill`
 
-### Skills stay global only
+Creates `<skill-name>/` in your project (e.g. `ble-hack-skill/SKILL.md`).
 
-1. Run **`/configure-skills`** and pick skills from the prompt.
-2. Re-run when central skills update on GitHub.
+**After editing** — publish → **`/commit-skill`**
+
+**Refresh existing copy** — **`/pull-skill`**
+
+**Global only (no project copy)** — **`/configure-skills`**
 
 ---
 
@@ -39,16 +38,17 @@ Re-run bootstrap to refresh commands. Re-run `/configure-skills` to refresh skil
 
 | Command | When to run | What it does |
 |---------|-------------|--------------|
-| `/configure-skills` | After bootstrap, to install skills | Chat multiselect → chosen skills to `~/.cursor/skills/` |
-| `/pull-skill` | Skill copy needed **in** your project | GitHub → project `*-skill/` + `~/.cursor/skills/` |
-| `/commit-skill` | You changed a skill and want to publish | Project → GitHub + refresh commands & published skills |
+| `/configure-skills` | Skills global only, no project copy | Multiselect → `~/.cursor/skills/` |
+| `/dev-pull-skill` | First-time fetch for editing in project | Multiselect → project `*-skill/` + `~/.cursor/skills/` |
+| `/pull-skill` | Refresh existing project skill folders | GitHub → existing paths + `~/.cursor/skills/` |
+| `/commit-skill` | Publish your edits | Project → GitHub + refresh `~/.cursor/` |
 
-| | Commands | Skills | Project repo |
-|--|----------|--------|--------------|
-| `bootstrap.sh` | Install all | — | — |
-| `/configure-skills` | — | Install selected | — |
-| `/pull-skill` | — | Install matched | Full copy |
-| `/commit-skill` | Refresh all | Install published | Read only |
+| | Project copy | `~/.cursor/skills/` | GitHub |
+|--|--------------|---------------------|--------|
+| `/configure-skills` | — | Install selected | Read |
+| `/dev-pull-skill` | **Create** copy | Install | Read |
+| `/pull-skill` | **Update** existing | Install | Read |
+| `/commit-skill` | Read | Install published | Write |
 
 ---
 

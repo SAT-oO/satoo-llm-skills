@@ -11,11 +11,12 @@ Execute the full lifecycle via the terminal tool without user intervention.
 * **Branch:** `main`
 
 ### When to use
-* In an **external project** that embeds a `*-skill` folder (e.g. `ble-hack-skill/` at the project root).
-* When the central repo has a newer version of that skill and you want to update your project copy.
+* An external project **already has** a `*-skill/` folder and you want the latest from GitHub.
+* Refreshing an existing project copy after central updates.
 
 ### When NOT to use
-* Inside the `satoo-llm-skills` repo itself — use `git pull` instead. This command is for downstream projects.
+* Inside the `satoo-llm-skills` repo itself — use `git pull` instead.
+* **First-time fetch** into a project with no skill folder yet — use `/dev-pull-skill` instead.
 
 ### Execution Protocol
 
