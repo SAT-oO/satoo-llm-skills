@@ -1,0 +1,62 @@
+{
+  "handshake": false,
+  "sustain_ms": 50,
+  "checkpoints": [
+    {
+      "id": "battery_query",
+      "label": "Battery query",
+      "expect": "No movement. App/battery read may update if visible.",
+      "burst_hex": "55 02 00 00 00 00 FC",
+      "burst_seconds": 1,
+      "one_shot": true
+    },
+    {
+      "id": "boost_stop",
+      "label": "Boost stop",
+      "expect": "No thrust; holds position.",
+      "burst_hex": "55 04 00 00 00 00 AA",
+      "burst_seconds": 1,
+      "one_shot": true
+    },
+    {
+      "id": "boost_40",
+      "label": "Boost scale 0x40",
+      "expect": "Rhythmic up/down thrust, moderate stroke depth.",
+      "burst_hex": "55 04 00 00 00 40 AA",
+      "burst_seconds": 4,
+      "stop_hex": "55 04 00 00 00 00 AA"
+    },
+    {
+      "id": "boost_ff",
+      "label": "Boost scale 0xFF",
+      "expect": "Stronger/faster thrust than 0x40.",
+      "burst_hex": "55 04 00 00 00 FF AA",
+      "burst_seconds": 4,
+      "stop_hex": "55 04 00 00 00 00 AA"
+    },
+    {
+      "id": "stretch_l3",
+      "label": "Direct Stretch level 3",
+      "expect": "Level-style stroke (not Boost rhythm). Distinct from Boost.",
+      "burst_hex": "55 08 00 00 02 03 F7",
+      "burst_seconds": 4,
+      "stop_hex": "55 08 00 01 00 00 F9"
+    },
+    {
+      "id": "m1_t5",
+      "label": "M1 mode travel 5",
+      "expect": "Preset M1 (Fast) pattern at travel 5.",
+      "burst_hex": "55 08 00 03 01 05 F4",
+      "burst_seconds": 4,
+      "stop_hex": "55 08 00 01 00 00 F9"
+    },
+    {
+      "id": "stretch_stop",
+      "label": "Stretch/M stop",
+      "expect": "All stretch/M motion stops.",
+      "burst_hex": "55 08 00 01 00 00 F9",
+      "burst_seconds": 1,
+      "one_shot": true
+    }
+  ]
+}
