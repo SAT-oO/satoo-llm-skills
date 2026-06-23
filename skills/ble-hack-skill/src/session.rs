@@ -6,12 +6,14 @@ use std::time::Duration;
 use tokio::time;
 use uuid::Uuid;
 
+use crate::gatt;
+
 pub const RESPONSE_WAIT: Duration = Duration::from_millis(500);
 pub const INTER_CMD_GAP: Duration = Duration::from_millis(50);
 pub const HANDSHAKE_GAP: Duration = Duration::from_millis(80);
 
 pub struct ChannelPair {
-    pub label: &'static str,
+    pub label: String,
     pub rx: Uuid,
     pub tx: Uuid,
 }
@@ -19,7 +21,7 @@ pub struct ChannelPair {
 impl Clone for ChannelPair {
     fn clone(&self) -> Self {
         Self {
-            label: self.label,
+            label: self.label.clone(),
             rx: self.rx,
             tx: self.tx,
         }
@@ -55,11 +57,66 @@ pub async fn adapter() -> Result<Adapter> {
         .context("No Bluetooth adapters found")
 }
 
+async fn try_connect_cached(
+    adapter: &Adapter,
+    device_id: &str,
+    channel: &ChannelPair,
+) -> Result<Option<Session>> {
+    let peripheral = match adapter
+        .peripherals()
+        .await?
+        .into_iter()
+        .find(|p| p.id().to_string().eq_ignore_ascii_case(device_id))
+    {
+        Some(p) => p,
+        None => return Ok(None),
+    };
+
+    if peripheral.is_connected().await.unwrap_or(false) {
+        let _ = peripheral.disconnect().await;
+        time::sleep(Duration::from_millis(200)).await;
+    }
+
+    peripheral.connect().await?;
+    peripheral.discover_services().await?;
+
+    let rx_char = peripheral
+        .characteristics()
+        .into_iter()
+        .find(|c| c.uuid == channel.rx)
+        .ok_or_else(|| anyhow!("Rx {} not found on device", channel.rx))?;
+    let tx_char = peripheral
+        .characteristics()
+        .into_iter()
+        .find(|c| c.uuid == channel.tx)
+        .ok_or_else(|| anyhow!("Tx {} not found on device", channel.tx))?;
+
+    let _ = peripheral.notifications().await?;
+    peripheral.subscribe(&tx_char).await?;
+    time::sleep(Duration::from_millis(200)).await;
+
+    Ok(Some(Session {
+        peripheral,
+        rx_char,
+        tx_char,
+        channel: ChannelPair {
+            label: channel.label.clone(),
+            rx: channel.rx,
+            tx: channel.tx,
+        },
+    }))
+}
+
 pub async fn connect(
     adapter: &Adapter,
     device_id: &str,
     channel: &ChannelPair,
 ) -> Result<Session> {
+    // Fast path: peripheral may still be in the OS cache without an active scan.
+    if let Some(session) = try_connect_cached(adapter, device_id, channel).await? {
+        return Ok(session);
+    }
+
     for attempt in 1..=3 {
         adapter.start_scan(ScanFilter::default()).await?;
         time::sleep(Duration::from_secs(3)).await;
@@ -94,7 +151,7 @@ pub async fn connect(
                 rx_char,
                 tx_char,
                 channel: ChannelPair {
-                    label: channel.label,
+                    label: channel.label.clone(),
                     rx: channel.rx,
                     tx: channel.tx,
                 },
@@ -103,6 +160,54 @@ pub async fn connect(
 
         adapter.stop_scan().await?;
         eprintln!("Scan attempt {attempt}/3: device not found, retrying...");
+        time::sleep(Duration::from_secs(1)).await;
+    }
+
+    Err(anyhow!("Device not found: {device_id}"))
+}
+
+/// Connect briefly, enumerate GATT, return channel pairs present on the device.
+pub async fn discover_channels_on_device(
+    adapter: &Adapter,
+    device_id: &str,
+) -> Result<Vec<ChannelPair>> {
+    if let Some(peripheral) = adapter
+        .peripherals()
+        .await?
+        .into_iter()
+        .find(|p| p.id().to_string().eq_ignore_ascii_case(device_id))
+    {
+        peripheral.connect().await?;
+        peripheral.discover_services().await?;
+        let channels = gatt::channels_for_device(
+            &peripheral.characteristics().into_iter().collect::<Vec<_>>(),
+        );
+        peripheral.disconnect().await?;
+        return Ok(channels);
+    }
+
+    for attempt in 1..=3 {
+        adapter.start_scan(ScanFilter::default()).await?;
+        time::sleep(Duration::from_secs(3)).await;
+
+        if let Some(peripheral) = adapter
+            .peripherals()
+            .await?
+            .into_iter()
+            .find(|p| p.id().to_string().eq_ignore_ascii_case(device_id))
+        {
+            adapter.stop_scan().await?;
+            peripheral.connect().await?;
+            peripheral.discover_services().await?;
+            let channels = gatt::channels_for_device(
+                &peripheral.characteristics().into_iter().collect::<Vec<_>>(),
+            );
+            peripheral.disconnect().await?;
+            return Ok(channels);
+        }
+
+        adapter.stop_scan().await?;
+        eprintln!("Channel discovery attempt {attempt}/3: device not found");
         time::sleep(Duration::from_secs(1)).await;
     }
 
@@ -143,19 +248,25 @@ pub async fn send_and_wait(
     notifications: &mut (impl StreamExt<Item = btleplug::api::ValueNotification> + Unpin),
     payload: &[u8],
 ) -> Result<Option<Vec<u8>>> {
+    send_and_wait_write(session, notifications, payload, None).await
+}
+
+pub async fn send_and_wait_write(
+    session: &Session,
+    notifications: &mut (impl StreamExt<Item = btleplug::api::ValueNotification> + Unpin),
+    payload: &[u8],
+    force_write: Option<WriteType>,
+) -> Result<Option<Vec<u8>>> {
     drain_notifications(
         notifications,
         session.tx_char.uuid,
         Duration::from_millis(30),
     )
     .await;
+    let wt = force_write.unwrap_or_else(|| write_type(&session.rx_char));
     session
         .peripheral
-        .write(
-            &session.rx_char,
-            payload,
-            write_type(&session.rx_char),
-        )
+        .write(&session.rx_char, payload, wt)
         .await?;
     let response = match time::timeout(RESPONSE_WAIT, notifications.next()).await {
         Ok(Some(n)) if n.uuid == session.tx_char.uuid => Some(n.value),
@@ -164,6 +275,36 @@ pub async fn send_and_wait(
     };
     time::sleep(INTER_CMD_GAP).await;
     Ok(response)
+}
+
+pub async fn listen_notifications(
+    _session: &Session,
+    notifications: &mut (impl StreamExt<Item = btleplug::api::ValueNotification> + Unpin),
+    duration: Duration,
+) -> Vec<(Uuid, Vec<u8>)> {
+    let mut collected = Vec::new();
+    let deadline = time::Instant::now() + duration;
+    while time::Instant::now() < deadline {
+        let remaining = deadline.saturating_duration_since(time::Instant::now());
+        match time::timeout(remaining, notifications.next()).await {
+            Ok(Some(n)) => collected.push((n.uuid, n.value)),
+            Ok(None) | Err(_) => break,
+        }
+    }
+    collected
+}
+
+pub async fn read_readable_chars(session: &Session) -> Result<Vec<(Uuid, Vec<u8>)>> {
+    use btleplug::api::CharPropFlags;
+    let mut out = Vec::new();
+    for c in session.peripheral.characteristics() {
+        if c.properties.contains(CharPropFlags::READ) {
+            if let Ok(data) = session.peripheral.read(&c).await {
+                out.push((c.uuid, data));
+            }
+        }
+    }
+    Ok(out)
 }
 
 pub async fn send_handshake(

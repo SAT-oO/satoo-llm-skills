@@ -4,6 +4,9 @@
 
 **Deliverable:** a living `FINDINGS.md` — precise, table-driven, actionable for the next human or LLM session.
 
+> **Humans:** follow `README.md` § Quickstart — copy-paste commands only.  
+> **Agents / deep reference:** this file (`SKILL.md`).
+
 **Do not assume a frame header** (e.g. `0x55`). That is one convention on some UART-style modules, not universal. Discover framing from automated scan, research, and live traffic.
 
 ---
@@ -24,26 +27,104 @@ User input (device address, product name, captures) **accelerates** the run but 
 
 ---
 
+## Algorithm (authoritative)
+
+Every session follows the same state machine. Artifacts chain forward; nothing skips a gate.
+
+```mermaid
+flowchart TD
+    A[ble_scan] --> B[Research]
+    B --> C[ble_probe --auto]
+    C --> D{Automation gate?}
+    D -->|no| A
+    D -->|yes| E[analyze_probe]
+    E --> F[expand_sweep_from_probe]
+    F --> G[ble_sweep --profile discover]
+    G -->|device missing| H[ble_sweep --offline]
+    G --> I[sweep_results.md]
+    H --> I
+    I --> J[ble_plan]
+    J --> K[verify_plan.json]
+    K --> L[ble_verify human]
+    L --> M[verify_results.md]
+    M --> N[ble_check]
+    N --> O[FINDINGS.md]
+```
+
+| Phase | Binary | Input → output | Gate |
+|-------|--------|----------------|------|
+| 0 Scan | `ble_scan` | air → `scan_results.md`, `ble_session.json` | `PRIMARY`/`CANDIDATE` + name match |
+| 1 Research | agent | web → notes (not FINDINGS) | before byte sweeps |
+| 2 Probe | `ble_probe --auto` | device → `test_results.md` | FFE1 echo or non-standard |
+| 3 Analyze | `analyze_probe` | probe rows → hot opcodes, tails, header | header = motor-channel vote |
+| 4 Expand | `expand_sweep_from_probe` | analysis → frame list | no external command tables |
+| 5 Sweep | `ble_sweep --profile discover` | frames → `sweep_results.md` | live BLE; `--offline` if device absent |
+| 6 Plan | `ble_plan` | sweep hits → `verify_plan.json` | ≥1 checkpoint |
+| 7 Verify | `ble_verify` | plan + human → `verify_results.md` | **y** = success per checkpoint |
+| 8 Check | `ble_check` | all artifacts → `FINDINGS.md` | `Ready for FINDINGS: true` |
+
+**One command:** `ble_run` executes phases 0→6, then 7 interactively, then 8. Live sweep falls back to `--offline` automatically when the device is unreachable.
+
+**Provenance rule:** `FINDINGS.md` contains only `verify_results.md` success rows. Probe and sweep produce candidates; verify produces truth.
+
+---
+
 ## Automated Pipeline (Run in Order)
 
 **Requires Bluetooth host permissions** (not sandbox). On macOS, run from a terminal with BLE access.
 
 ```
-STEP 0  cargo run --bin ble_scan -- --brand X --product Y --discover --output scan_results.md
+STEP 0  cargo run -p ble-hack-skill --bin ble_scan -- --brand X --product Y --discover --output scan_results.md
         → pick UUID; confirm FFE1/FFE2 on target
 STEP 1  Research buttplug + GitHub + official app name (before byte sweeps)
         → note OEM stack, likely tail types (CRC / AA / 00)
-STEP 2  cargo run --bin ble_probe -- --device UUID --auto --output test_results.md
-        → note echo/ack opcodes; do NOT mark verified
-STEP 3  cargo run --bin ble_sweep -- --device UUID --output sweep_results.md
-        → if tails unclear: sweep CRC, AA, zero-tail per opcode
-STEP 4  Write verify_plan.json from probe hits (≤15 checkpoints, all families + stops)
-STEP 5  cargo run --bin ble_verify -- --device UUID --plan verify_plan.json
+STEP 2  cargo run -p ble-hack-skill --bin ble_probe -- --device UUID --auto --output test_results.md
+        → header vote on FFE1 only; opcode sweep; tail-family probes (CRC / AA)
+STEP 3  cargo run -p ble-hack-skill --bin ble_sweep -- --device UUID --profile discover --probe test_results.md --output sweep_results.md
+        → algorithmic grid from probe analysis (no reference command tables)
+        → without hardware: add `--offline` to synthesize hits from probe evidence
+STEP 4  cargo run -p ble-hack-skill --bin ble_plan -- --workdir .
+        → writes verify_plan.json from sweep echo/non-standard hits only
+STEP 5  cargo run -p ble-hack-skill --bin ble_verify -- --workdir .
         → user observes movement; y/n/r/q each checkpoint
-STEP 6  Write FINDINGS.md from verify_results.md success rows only
+STEP 6  cargo run -p ble-hack-skill --bin ble_check -- --workdir . --brand BRAND
+        → completeness gate + FINDINGS.md from verify success rows only
 ```
 
-**One-go invocation:** `/ble-hack-skill` → run Steps 0–4, draft `verify_plan.json`, **stop for Step 6 with user present**, then Step 7.
+**One-go invocation:** `/ble-hack-skill` → run `ble_run` (or the loop below) until `FINDINGS.md` is complete or you are blocked on human verify.
+
+```bash
+# From the project root that contains ble-hack-skill/ and session artifacts:
+cargo run -p ble-hack-skill --bin ble_run -- --brand BRAND --product PRODUCT --workdir .
+```
+
+`ble_run` repeats scan → probe until the **automation gate** passes, then discover sweep (live or offline fallback) → `ble_plan` → interactive `ble_verify` → `ble_check` → `FINDINGS.md`.
+
+### One-go iteration contract (agent)
+
+The agent **does not stop** after a single silent probe or wrong scan target. Loop until success or a hard blocker:
+
+| Gate | Pass condition | On fail |
+|------|----------------|---------|
+| Scan | `PRIMARY`/`CANDIDATE` with **local name match** when `--product` set | Rescan; ask user to power device, disconnect official app |
+| GATT | `FFE1`/`FFE2` (or discovered write/notify pair) on target | Try next candidate; do not byte-sweep on anonymous RSSI winner |
+| Probe | Echo or non-silent response on FFE1; tail-family hits (AA/CRC) | Retry probe; extend opcode sweep |
+| Sweep | `ble_sweep --profile discover` hits cover motor families | Re-probe; check header vote; try `--offline` if device absent |
+| Plan | `ble_check` reports 0 missing sweep→plan gaps | Revise `expand_sweep_from_probe` rules or re-sweep |
+| Verify | User presses **y** at each checkpoint | Revise `verify_plan.json`; re-probe failed families only |
+| FINDINGS | `ble_check` → `Ready for FINDINGS: true` | Never copy echo-only probe rows |
+
+**Success** = `ble_check` reports `Ready for FINDINGS: true` (sweep hits ⊆ plan ⊆ verify success) and `FINDINGS.md` renders from those rows.
+
+**Hard blocker** = device not advertising, no GATT write channel after 5 iterations, probe expansion cannot cover sweep hits, or user quits verify.
+
+Manual equivalent of `ble_run`:
+
+```
+STEP 0–4  (loop until automation gate passes)
+STEP 5    ble_verify — user at device
+STEP 6    FINDINGS.md ← verify success rows only
+```
 
 **If Step 0 yields only SKIP / LOW devices**, fall back to the [Core Loop](#core-loop-fallback).
 
@@ -51,7 +132,7 @@ STEP 6  Write FINDINGS.md from verify_results.md success rows only
 
 ## Anti-patterns — do not repeat
 
-These caused a wrong Jetpack protocol despite plausible BLE logs. **Hard rules:**
+These caused wrong protocol conclusions despite plausible BLE logs. **Hard rules:**
 
 1. **Never write FINDINGS.md before `ble_verify` completes.** Probes produce candidates only.
 2. **Never mark a command verified because Tx echoed it.** Wrong frames can echo. Confirm **physical movement** (y at checkpoint).
@@ -60,6 +141,8 @@ These caused a wrong Jetpack protocol despite plausible BLE logs. **Hard rules:*
 5. **Never map bytes from echo alone.** Validate byte semantics with isolated checkpoints (one family at a time).
 6. **Never treat status/battery byte changes as motor proof.** Read `55 02 …` for SOC; dropping byte ≠ thrust confirmed.
 7. **Never merge tail families in one verify checkpoint.** Boost (AA), stretch (CRC `p1=0x00`), M-mode (CRC `p1=0x03`) are separate rows in `verify_plan.json`.
+8. **Never seed verify hex from a reference document.** Candidates must flow `ble_probe` → `analyze_probe` → `expand_sweep_from_probe` → `ble_sweep` hits → `ble_plan`.
+9. **Never pick a scan target on RSSI alone.** Prefer **local name match** (`--brand` / `--product`) and UART GATT (`FFE0`/`FFE1`/`FFE2`) over anonymous high-RSSI peripherals that may share a chip OEM but are unrelated products.
 
 When probe says **echo** → add to `verify_plan.json`, not FINDINGS.md.
 
@@ -85,7 +168,7 @@ cargo run --bin ble_scan -- --seconds 5 --output scan_results.md
 | Manufacturer decode | Reads Bluetooth SIG company ID from advertisement manufacturer data |
 | Deprioritize major OEMs | Apple, Microsoft, Samsung, Google, Intel, Broadcom, Meta, Sony, Dell, HP, Bose, Amazon, Xiaomi, Huawei, Logitech, etc. — typical phones, laptops, watches |
 | Prioritize candidates | Unknown manufacturer, niche OEM, UART service UUIDs (`FFE0`/`FFE1`/`FFE2`) |
-| Brand/product match | Optional `--brand` / `--product` boost devices whose **local name** matches |
+| Brand/product match | Optional `--brand` / `--product` boost devices whose **local name** matches (product token is matched inside the name, e.g. `Klitty` matches `Svakom Klitty`) |
 | Rank | `PRIMARY` ≥ 80, `CANDIDATE` ≥ 40, `LOW` &lt; 40, `SKIP` &lt; 0 (major OEM) |
 | GATT discovery | `--discover` connects to top candidate and lists full service/characteristic UUIDs |
 | Output | Terminal table + optional `scan_results.md` |
@@ -109,19 +192,47 @@ This alone locates the target often enough to skip manual address entry.
 
 ---
 
+## Probe-driven sweep expansion (no hardcoded command tables)
+
+After `ble_probe --auto`, `analyze_probe(test_results.md)` derives:
+
+| Signal | Source rows | Effect on sweep |
+|--------|-------------|-----------------|
+| Frame header | Majority vote on FFE1 `opcode_*` / `tail_*` rows | Correct `0x55` header (ignore non-motor channel header probes) |
+| Hot opcodes | Echo or useful non-standard on FFE1 | Families to expand |
+| Tail per opcode | `tail_aa_*`, `tail_crc_*`, or CRC/AA-shaped hits | AA scale grid, CRC stretch/M grid, or zero-tail param grid |
+| Stretch subcmds | `tail_crc_*` with opcode `0x08` byte 3 | `p0=0x00` level grid, `p0=0x01` stop, `p0=0x03` M-mode grid |
+| Query opcodes | `tail_crc_query_*` or CRC zero-param hits (`0x02`, `0xA0`) | Single CRC query frame per opcode |
+
+`ble_sweep --profile discover --probe test_results.md` sends only frames from `expand_sweep_from_probe()`.
+
+`ble_check` compares expansion ⊇ sweep hits ⊇ verify plan ⊇ FINDINGS — **no external reference doc**.
+
+---
+
 ## Step 6: Human verification (`ble_verify`)
 
 **Required before FINDINGS.md.**
 
 ```bash
-cargo run --bin ble_verify -- --device UUID --plan verify_plan.json --output verify_results.md
+cargo run -p ble-hack-skill --bin ble_verify -- --workdir .
 ```
+
+Device UUID is read from `ble_session.json` (written by `ble_run` / scan) or `scan_results.md`. Override with `--device` only when needed.
 
 1. User watches device during each checkpoint burst.
 2. Compare to `expect` in plan — thrust, stop, vibration, etc.
 3. Press **y** / **n** / **r** / **q** (see README).
 
-Draft plan from `verify_plan.example.json`. ≤15 checkpoints. Include stop command per family. Only **y** rows → FINDINGS.md.
+Plan comes from `ble_plan` (sweep hits). Include stop command per family. Only **y** rows → FINDINGS.md.
+
+## Step 7: Pipeline check (`ble_check`)
+
+```bash
+cargo run -p ble-hack-skill --bin ble_check -- --workdir . --brand BRAND --product PRODUCT
+```
+
+Confirms probe expansion covers sweep hits, sweep hits are in verify plan, and verify success rows are complete. Regenerates `FINDINGS.md` from verify rows only.
 
 ---
 
@@ -330,7 +441,7 @@ Opening line: document only commands that work; exclude rejected/no-action probe
 - Table: command family → tail rule (CRC-8 C2, fixed `AA`, fixed `00`, …)
 - If CRC-8 C2 applies, document poly/init/xorout/refin/refout; use `src/crc.rs` when probing
 
-**Do not assume one tail byte for all opcodes.** KooSync/Jetpack uses CRC on `0x08` and fixed `AA` on `0x04`.
+**Do not assume one tail byte for all opcodes.** Some UART OEM stacks use CRC on one opcode family and fixed `AA` or `00` on another — test each family separately.
 
 #### 5+. One `##` section per verified command family
 
@@ -370,6 +481,8 @@ Short table: use case → family → hex pattern.
 
 ### Auxiliary files
 
+Written in the **project root** (the repo using this skill), not inside `ble-hack-skill/`:
+
 | File | Contents |
 | --- | --- |
 | `scan_results.md` | Full scan from `ble_scan` |
@@ -377,6 +490,7 @@ Short table: use case → family → hex pattern.
 | `sweep_results.md` | Parameter sweep from `ble_sweep` |
 | `verify_results.md` | Human gate from `ble_verify` — **source of truth for FINDINGS.md** |
 | `verify_plan.json` | Checkpoint script for Step 6 |
+| `FINDINGS.md` | Verified commands only |
 
 Merge **success** rows from `verify_results.md` into FINDINGS.md; never from probe grids alone.
 
@@ -384,7 +498,7 @@ Merge **success** rows from `verify_results.md` into FINDINGS.md; never from pro
 
 After header `0x55` is confirmed:
 
-1. Fixed `AA` — e.g. `55 04 00 00 00 {scale} AA` (Boost on KooSync)
+1. Fixed `AA` — e.g. `55 04 00 00 00 {scale} AA` on some video-sync thrust families
 2. CRC-8 C2 — `frame_with_crc([55, cmd, p0, p1, p2, p3])` (Stretch / M-mode)
 3. Fixed `00` — legacy Svakom 7-byte (Klitty vibrate)
 
@@ -394,18 +508,25 @@ Validate with **physical effect** — wrong tails may still echo on some firmwar
 
 ## `ble_scan` / `ble_probe` / `ble_sweep` / `ble_verify` Implementation Reference
 
-This folder ships four Rust binaries (`btleplug` + `tokio`):
+This folder ships Rust binaries (`btleplug` + `tokio`):
 
 | File | Role |
 | ---- | ---- |
 | `src/manufacturers.rs` | SIG company ID classify (major OEM vs niche vs unknown) |
 | `src/crc.rs` | CRC-8 C2 tail (`frame_with_crc`, `frame_with_aa`) |
+| `src/probe_analyze.rs` | Parse probe results; `expand_sweep_from_probe()` |
+| `src/discover.rs` | Sweep→plan→FINDINGS; `completeness_report()` |
+| `src/verify.rs` | Verify plan types + `verify_results.md` parsing |
 | `src/session.rs` | Shared connect, subscribe, send, burst, handshake |
 | `src/bin/ble_scan.rs` | Scan, rank, optional `--discover` GATT dump |
-| `src/bin/ble_probe.rs` | Header probes, opcode sweep, `--auto` pipeline, `--burst` |
-| `src/bin/ble_sweep.rs` | Single-session parameter grid with status before/after |
-| `src/bin/ble_verify.rs` | Interactive human verification gate (Step 6) |
-| `verify_plan.example.json` | Example checkpoint plan |
+| `src/bin/ble_probe.rs` | Header probes, opcode sweep, tail-family probes, `--auto` |
+| `src/bin/ble_sweep.rs` | Generic grid or `--profile discover` (probe-expanded) |
+| `src/bin/ble_plan.rs` | Write verify plan from sweep hits (no BLE) |
+| `src/bin/ble_run.rs` | One-go: scan → probe → discover sweep → verify → FINDINGS |
+| `src/bin/ble_check.rs` | Pipeline completeness gate + FINDINGS regen |
+| `src/bin/ble_findings.rs` | Render FINDINGS.md from verify success rows |
+| `src/pipeline.rs` | Scan ranking, target pick, automation gate |
+| `verify_plan.example.json` | Minimal example plan shape (prefer `ble_plan` output) |
 | `Cargo.toml` | Dependencies |
 
 ### `ble_verify` flags
@@ -415,6 +536,28 @@ This folder ships four Rust binaries (`btleplug` + `tokio`):
 | `--device UUID` | Target peripheral |
 | `--plan path` | JSON checkpoint plan (required) |
 | `--output path` | Write `verify_results.md` (default) |
+
+### `ble_sweep` flags
+
+| Flag | Purpose |
+| ---- | ------- |
+| `--device UUID` | Target peripheral (required unless `--offline`) |
+| `--profile discover` | Probe-expanded grid (preferred) |
+| `--profile generic` | Blind opcode/param grid for unknown devices |
+| `--probe path` | `test_results.md` for discover profile |
+| `--offline` | Synthesize sweep hits from probe evidence (no BLE) |
+| `--output path` | Write `sweep_results.md` |
+
+### `ble_run` flags
+
+| Flag | Purpose |
+| ---- | ------- |
+| `--brand` / `--product` | Scan filters; require name match when set |
+| `--workdir path` | Artifact directory (default `.`) |
+| `--skip-verify` | Stop after plan; print verify/check commands |
+| `--offline-sweep` | Skip live BLE sweep; use `--offline` synthesis |
+| `--max-iter N` | Scan/probe retry limit (default 5) |
+| `--discover` | Re-run GATT discovery on scan target |
 
 ### `ble_probe` flags
 
@@ -446,10 +589,10 @@ Ranking scores (approximate):
 - [ ] `ble_scan --discover` → UUID + Rx/Tx UUIDs
 - [ ] Research app/OEM **before** sweeps
 - [ ] `ble_probe --auto` → candidates in `test_results.md`
-- [ ] `ble_sweep` if tails/families unclear
-- [ ] `verify_plan.json` drafted (all families + stops)
+- [ ] `ble_sweep --profile discover --probe test_results.md`
+- [ ] `ble_plan` → `verify_plan.json` from sweep hits
 - [ ] **`ble_verify` with user watching device**
-- [ ] FINDINGS.md ← success rows only
+- [ ] `ble_check` → `Ready for FINDINGS: true` + FINDINGS.md
 - [ ] Official app disconnected during connect
 
 ---
@@ -469,6 +612,6 @@ Ranking scores (approximate):
 | Device | FINDINGS style | Key protocol facts |
 | ------ | -------------- | ------------------ |
 | Svakom Klitty | Verified commands | `0x55` 7-byte, tail `00`; opcodes `03`/`09`/`14`; sustain ~50 ms |
-| Kaotik Jetpack / HF470 | Verified commands | Boost `0x04` tail `AA`; Stretch/M `0x08` tail CRC-8 C2; see reference capture |
+| Kaotik Jetpack / HF470 | Verified commands | Example of probe-driven discover: Boost `0x04` tail `AA`; Stretch/M `0x08` tail CRC-8 C2; query `0x02`/`0xA0`; ~44 verify checkpoints when sweep hits full grid |
 
 Do not copy bytes across devices. See `FINDINGS.template.md` for output format.

@@ -1,17 +1,23 @@
 //! Interactive human verification — mandatory gate before FINDINGS.md.
 //!
-//!   cargo run --bin ble_verify -- --device UUID --plan verify_plan.json
+//!   cargo run -p ble-hack-skill --bin ble_verify
+//!   cargo run -p ble-hack-skill --bin ble_verify -- --workdir .
+//!   cargo run -p ble-hack-skill --bin ble_verify -- --plan verify_plan_m_modes.json
 //!
-//! At each checkpoint the user watches the device and chooses:
+//! Device UUID is read from `ble_session.json` or `scan_results.md` in the workdir
+//! unless `--device` is passed.
 //!   y = success (correct movement) → next
 //!   n = error (wrong/no movement)  → next, marked failed
 //!   r = replay this checkpoint
 //!   q = quit early, save results so far
 
 use anyhow::{Context, Result};
+use ble_hack_skill::discover;
+use ble_hack_skill::verify;
 use ble_hack_skill::session::{
     adapter, connect, send_and_wait, send_burst, send_handshake, spaced_hex, ChannelPair,
 };
+use ble_hack_skill::workdir;
 use btleplug::api::{bleuuid::uuid_from_u16, Peripheral};
 use serde::Deserialize;
 use std::fs;
@@ -20,11 +26,13 @@ use std::path::Path;
 use std::time::Duration;
 use tokio::time;
 
-const DEFAULT_CHANNEL: ChannelPair = ChannelPair {
-    label: "FFE1/FFE2",
-    rx: uuid_from_u16(0xFFE1),
-    tx: uuid_from_u16(0xFFE2),
-};
+fn default_channel() -> ChannelPair {
+    ChannelPair {
+        label: "FFE1/FFE2".into(),
+        rx: uuid_from_u16(0xFFE1),
+        tx: uuid_from_u16(0xFFE2),
+    }
+}
 
 const SVAKOM_HANDSHAKE: [&[u8]; 3] = [
     &[0x55, 0x04, 0x00, 0x00, 0x01, 0xFF, 0xAA],
@@ -93,12 +101,18 @@ enum PromptChoice {
 #[tokio::main]
 async fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
-    let device = arg_value(&args, "--device").context("--device UUID required")?;
-    let plan_path = arg_value(&args, "--plan").context("--plan verify_plan.json required")?;
-    let output = arg_value(&args, "--output").unwrap_or_else(|| "verify_results.md".into());
+    let workdir = workdir::workdir_from_args(&args);
+    let (brand, product) = workdir::brand_product_from_args(&workdir, &args);
+    let findings_auto = !args.iter().any(|a| a == "--no-findings");
+    let device = workdir::resolve_device(&workdir, arg_value(&args, "--device").as_deref())?;
+    let plan_path = workdir::resolve_plan_path(&workdir, arg_value(&args, "--plan").as_deref());
+    let output = workdir::resolve_output_path(&workdir, arg_value(&args, "--output").as_deref());
 
-    let plan: Plan = serde_json::from_str(&fs::read_to_string(&plan_path)?)
-        .with_context(|| format!("parse plan: {plan_path}"))?;
+    let plan: Plan = serde_json::from_str(
+        &fs::read_to_string(&plan_path)
+            .with_context(|| format!("read plan: {}", plan_path.display()))?,
+    )
+    .with_context(|| format!("parse plan: {}", plan_path.display()))?;
 
     if plan.checkpoints.is_empty() {
         anyhow::bail!("plan has no checkpoints");
@@ -213,11 +227,29 @@ async fn main() -> Result<()> {
 
     session.peripheral.disconnect().await?;
 
-    let md = format_results(&device, &plan_path, &results);
+    let md = format_results(&device, plan_path.to_str().unwrap(), &results);
     fs::write(&output, &md)?;
     print_summary(&results);
-    println!("\nWrote {output}");
-    println!("Only SUCCESS rows may be copied into FINDINGS.md.");
+    println!("\nWrote {}", output.display());
+
+    let ok = results.iter().filter(|r| r.verdict == Verdict::Success).count();
+    if ok > 0 && findings_auto {
+        let summary = verify::VerifySummary::from_markdown(&md);
+        let sweep_md = fs::read_to_string(workdir.join("sweep_results.md")).ok();
+        let findings_path = workdir.join("FINDINGS.md");
+        let body = discover::render_findings_strict(&brand, &product, &[summary], sweep_md.as_deref());
+        fs::write(&findings_path, body)?;
+        println!("Wrote {} ({} success rows)", findings_path.display(), ok);
+    } else if ok > 0 {
+        println!("Only SUCCESS rows may be copied into FINDINGS.md.");
+        println!(
+            "Regenerate: cargo run -p ble-hack-skill --bin ble_findings -- --workdir {} --brand \"{}\"",
+            workdir.display(),
+            brand
+        );
+    } else {
+        println!("No SUCCESS rows — FINDINGS.md not updated.");
+    }
 
     Ok(())
 }
@@ -231,11 +263,11 @@ fn arg_value(args: &[String], flag: &str) -> Option<String> {
 fn resolve_channel(name: Option<&str>) -> ChannelPair {
     match name {
         Some("ae01") | Some("AE01") => ChannelPair {
-            label: "AE01/AE02",
+            label: "AE01/AE02".into(),
             rx: uuid_from_u16(0xAE01),
             tx: uuid_from_u16(0xAE02),
         },
-        _ => DEFAULT_CHANNEL,
+        _ => default_channel(),
     }
 }
 

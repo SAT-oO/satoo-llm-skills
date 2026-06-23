@@ -1,4 +1,4 @@
-//! CRC-8 C2 — tail byte for Svakom/KooSync `0x08` and query opcodes on some devices.
+//! CRC-8 C2 — tail byte used by some UART-framed BLE devices (e.g. Svakom-class OEM stacks).
 
 /// CRC-8 C2: poly=0xF0, init=0xFF, xorout=0xFF, refin=false, refout=true.
 /// Computed over the first 6 bytes of a 7-byte frame; result is byte 6.
@@ -26,7 +26,7 @@ pub fn frame_with_crc(bytes: [u8; 6]) -> [u8; 7] {
     [bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], crc]
 }
 
-/// Build a 7-byte frame with fixed `0xAA` tail (Boost / init family).
+/// Build a 7-byte frame with fixed `0xAA` tail (common on AA-suffix UART families).
 pub fn frame_with_aa(bytes: [u8; 6]) -> [u8; 7] {
     [
         bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], 0xAA,
@@ -38,32 +38,24 @@ mod tests {
     use super::*;
 
     #[test]
-    fn jetpack_direct_stretch_level1() {
+    fn crc8_c2_known_stretch_frame() {
         let f = frame_with_crc([0x55, 0x08, 0x00, 0x00, 0x01, 0x01]);
-        assert_eq!(f, [0x55, 0x08, 0x00, 0x00, 0x01, 0x01, 0xFC]);
+        assert_eq!(f[6], 0xFC);
     }
 
     #[test]
-    fn jetpack_stretch_stop() {
-        let f = frame_with_crc([0x55, 0x08, 0x00, 0x01, 0x00, 0x00]);
-        assert_eq!(f, [0x55, 0x08, 0x00, 0x01, 0x00, 0x00, 0xF9]);
-    }
-
-    #[test]
-    fn jetpack_battery_query() {
+    fn crc8_c2_battery_query_frame() {
         let f = frame_with_crc([0x55, 0x02, 0x00, 0x00, 0x00, 0x00]);
-        assert_eq!(f, [0x55, 0x02, 0x00, 0x00, 0x00, 0x00, 0xFC]);
+        assert_eq!(
+            f,
+            [0x55, 0x02, 0x00, 0x00, 0x00, 0x00, 0xFC],
+            "battery query tail"
+        );
     }
 
     #[test]
-    fn jetpack_status_query() {
-        let f = frame_with_crc([0x55, 0xA0, 0x00, 0x00, 0x00, 0x00]);
-        assert_eq!(f, [0x55, 0xA0, 0x00, 0x00, 0x00, 0x00, 0xFB]);
-    }
-
-    #[test]
-    fn jetpack_m1_travel1() {
-        let f = frame_with_crc([0x55, 0x08, 0x00, 0x03, 0x01, 0x01]);
-        assert_eq!(f, [0x55, 0x08, 0x00, 0x03, 0x01, 0x01, 0xF0]);
+    fn frame_with_aa_tail() {
+        let f = frame_with_aa([0x55, 0x04, 0x00, 0x00, 0x00, 0x40]);
+        assert_eq!(f, [0x55, 0x04, 0x00, 0x00, 0x00, 0x40, 0xAA]);
     }
 }

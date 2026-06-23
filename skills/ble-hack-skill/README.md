@@ -1,59 +1,27 @@
 # ble-hack-skill
 
-Reverse-engineer BLE device protocols. Full spec: `SKILL.md`. Output: `FINDINGS.md` (verified commands only).
+Discovers a BLE device’s command protocol by scanning, probing, and sweeping candidate frames, then builds `FINDINGS.md` from commands you confirm actually work on hardware. Full workflow: `SKILL.md`.
 
-## Workflow
+## What you provide
 
-Device powered on. Disconnect official app. Run from `ble-hack-skill/` (needs Bluetooth — not sandboxed).
+- **Brand and product name** (as shown in the device’s Bluetooth name)
+- **Device powered on**, official app disconnected
+- **Terminal with Bluetooth** (macOS: run outside sandbox)
+- **Your eyes at verify time** — press **y** / **n** / **r** / **q** when each test command runs
 
-**1. Find device**
+Run from the project root (where `FINDINGS.md` will live).
+
+## What to run
+
 ```bash
-cargo run --bin ble_scan -- --brand BRAND --product NAME --discover --output scan_results.md
+cargo run -p ble-hack-skill --bin ble_run -- --brand YOUR_BRAND --product YOUR_PRODUCT --workdir .
 ```
-Check: target name matches, tier PRIMARY/CANDIDATE, note UUID + `FFE1`/`FFE2`.
 
-**2. Research before sweeps**
-Search buttplug, GitHub, official app name. Check for shared OEM stack (e.g. KooSync = Svakom). Note likely tail bytes (CRC vs `AA` vs `00`).
+Stay at the device when `ble_verify` asks. Done when it prints `Ready for FINDINGS: true` — open `FINDINGS.md`.
 
-**3. Probe candidates**
+If verify was skipped earlier:
+
 ```bash
-cargo run --bin ble_probe -- --device UUID --auto --output test_results.md
+cargo run -p ble-hack-skill --bin ble_verify -- --workdir .
+cargo run -p ble-hack-skill --bin ble_check -- --workdir . --brand "YOUR_BRAND" --product "YOUR_PRODUCT"
 ```
-Check: which channel responds, header byte, opcodes that ack/echo. **Do not treat echo as verified.**
-
-**4. Sweep parameters** (if multiple tail families or unclear bytes)
-```bash
-cargo run --bin ble_sweep -- --device UUID --output sweep_results.md
-```
-Check: test CRC-8 C2 (`src/crc.rs`), fixed `AA`, and zero-tail separately per opcode.
-
-**5. Draft verification plan**
-Copy `verify_plan.example.json` → `verify_plan.json`. Add ≤15 checkpoints — one per command family (Boost, stretch, M-mode, stop, battery query). Each `expect` field describes **physical movement** to watch for.
-
-**6. Human gate — required**
-```bash
-cargo run --bin ble_verify -- --device UUID --plan verify_plan.json --output verify_results.md
-```
-User at device. At each checkpoint: observe movement. Press **y** if correct, **n** if wrong/none, **r** to replay, **q** to quit.
-
-**7. Write FINDINGS.md**
-Copy **success** rows from `verify_results.md` into `FINDINGS.md` using `FINDINGS.template.md`. Skip everything that got **n** or never passed Step 6.
-
-## Tools
-
-| Binary | Purpose |
-| ------ | ------- |
-| `ble_scan` | Scan, rank, GATT discovery |
-| `ble_probe` | Header/opcode probes, `--auto` |
-| `ble_sweep` | Parameter grid (CRC / AA / zero-tail) |
-| `ble_verify` | Interactive movement confirmation |
-
-## Do not
-
-- Write FINDINGS.md from probe output alone
-- Treat Tx echo as motor proof
-- Assume one tail byte for all opcodes
-- Treat status/battery byte changes as movement
-- Skip `ble_verify`
-
-See **Anti-patterns** in `SKILL.md` for why.

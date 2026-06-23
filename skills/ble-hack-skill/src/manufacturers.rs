@@ -28,17 +28,23 @@ pub fn classify(id: Option<u16>) -> OemClass {
     OemClass::Unknown
 }
 
-/// Returns true when `needle` appears in `brand` or `local_name` (case-insensitive).
+/// Returns true when brand or product appears in `local_name` (case-insensitive).
 pub fn name_matches(brand: &str, product: Option<&str>, local_name: Option<&str>) -> bool {
-    let brand_l = brand.to_ascii_lowercase();
-    let check = |s: &str| {
-        let s = s.to_ascii_lowercase();
-        s.contains(&brand_l) || brand_l.contains(&s)
+    let Some(name) = local_name else {
+        return false;
     };
-    if product.is_some_and(check) {
+    let name_l = name.to_ascii_lowercase();
+    let brand_l = brand.to_ascii_lowercase();
+    if name_l.contains(&brand_l) || brand_l.contains(&name_l) {
         return true;
     }
-    local_name.is_some_and(check)
+    if let Some(product) = product {
+        let product_l = product.to_ascii_lowercase();
+        if name_l.contains(&product_l) || product_l.contains(&name_l) {
+            return true;
+        }
+    }
+    false
 }
 
 /// Major OEMs — phones, laptops, watches, mainstream accessories.

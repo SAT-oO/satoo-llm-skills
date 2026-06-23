@@ -7,6 +7,7 @@
 //!   cargo run --bin ble_scan -- --seconds 5 --output scan_results.md
 
 use anyhow::{Context, Result};
+use ble_hack_skill::gatt;
 use ble_hack_skill::manufacturers::{self, OemClass};
 use btleplug::api::{bleuuid::uuid_from_u16, Central, CharPropFlags, Manager, Peripheral, ScanFilter};
 use btleplug::platform::Manager as BluetoothManager;
@@ -124,7 +125,11 @@ async fn main() -> Result<()> {
     print_report(&devices, brand.as_deref(), product.as_deref());
 
     if discover {
-        if let Some(top) = devices.first().filter(|d| d.tier != "SKIP") {
+        let top = devices
+            .iter()
+            .find(|d| d.tier != "SKIP" && d.brand_match)
+            .or_else(|| devices.iter().find(|d| d.tier != "SKIP"));
+        if let Some(top) = top {
             println!("\n--- GATT discovery: {} ---", top.local_name.as_deref().unwrap_or("?"));
             discover_gatt(&adapter, top).await?;
         } else {
@@ -398,6 +403,16 @@ async fn discover_gatt(adapter: &btleplug::platform::Adapter, device: &ScannedDe
         }
     }
 
+    let characteristics = peripheral.characteristics();
     peripheral.disconnect().await?;
+
+    let channels = gatt::channels_for_device(&characteristics.into_iter().collect::<Vec<_>>());
+    if !channels.is_empty() {
+        println!("\nInferred motor channels:");
+        for ch in &channels {
+            println!("  {} — Rx {} / Tx {}", ch.label, ch.rx, ch.tx);
+        }
+    }
+
     Ok(())
 }
