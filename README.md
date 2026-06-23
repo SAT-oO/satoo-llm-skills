@@ -7,7 +7,8 @@ Central repository for custom Cursor skills. **GitHub is the single source of tr
 ```
 satoo-llm-skills/
 ├── commands/
-│   └── commit-skill.md      # Self-updating slash command (canonical definition lives here)
+│   ├── commit-skill.md      # Push workspace skills → GitHub
+│   └── pull-skill.md        # Pull GitHub skills → external project
 ├── bootstrap.sh               # One-time setup: installs from GitHub → ~/.cursor/
 └── skills/                    # Skill packages (each folder ends with -skill)
     └── ble-hack-skill/
@@ -38,6 +39,20 @@ The command will:
 2. Merge your workspace skill(s) into `skills/`
 3. Push to `main` if there are changes
 4. Reinstall `commands/` and `skills/` from the repo into `~/.cursor/`
+
+## Pulling a skill into your project
+
+If your project already has a `*-skill` folder and you want the latest version from this repo:
+
+1. Run `/pull-skill` in Cursor Agent from that external project.
+
+The command will:
+1. Clone this repo from GitHub
+2. Match workspace `*-skill` folders by name against `skills/` in the central repo
+3. Overwrite the project copy with the remote version
+4. Update `~/.cursor/skills/` for the pulled skill(s)
+
+This is the reverse of `/commit-skill` — use pull to consume updates, commit to publish changes.
 
 ## Maintaining this repo
 
