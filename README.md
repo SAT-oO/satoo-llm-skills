@@ -12,11 +12,11 @@ curl -sSL https://raw.githubusercontent.com/SAT-oO/satoo-llm-skills/main/bootstr
 
 **2. Cursor Agent — install skills you need:**
 
-Run **`/configure-global`** and pick from the multiselect prompt.
+Run **`/configure-skills`** and pick from the multiselect prompt.
 
-Or name them inline: `/configure-global ble-hack-skill`
+Or name them inline: `/configure-skills ble-hack-skill`
 
-Re-run bootstrap to refresh commands. Re-run `/configure-global` to refresh skills.
+Re-run bootstrap to refresh commands. Re-run `/configure-skills` to refresh skills.
 
 ---
 
@@ -30,7 +30,7 @@ Re-run bootstrap to refresh commands. Re-run `/configure-global` to refresh skil
 
 ### Skills stay global only
 
-1. Run **`/configure-global`** and pick skills from the prompt.
+1. Run **`/configure-skills`** and pick skills from the prompt.
 2. Re-run when central skills update on GitHub.
 
 ---
@@ -39,14 +39,14 @@ Re-run bootstrap to refresh commands. Re-run `/configure-global` to refresh skil
 
 | Command | When to run | What it does |
 |---------|-------------|--------------|
-| `/configure-global` | After bootstrap, to install skills | Chat multiselect → chosen skills to `~/.cursor/skills/` |
+| `/configure-skills` | After bootstrap, to install skills | Chat multiselect → chosen skills to `~/.cursor/skills/` |
 | `/pull-skill` | Skill copy needed **in** your project | GitHub → project `*-skill/` + `~/.cursor/skills/` |
 | `/commit-skill` | You changed a skill and want to publish | Project → GitHub + refresh commands & published skills |
 
 | | Commands | Skills | Project repo |
 |--|----------|--------|--------------|
 | `bootstrap.sh` | Install all | — | — |
-| `/configure-global` | — | Install selected | — |
+| `/configure-skills` | — | Install selected | — |
 | `/pull-skill` | — | Install matched | Full copy |
 | `/commit-skill` | Refresh all | Install published | Read only |
 

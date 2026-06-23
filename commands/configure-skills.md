@@ -1,4 +1,4 @@
-# configure-global
+# configure-skills
 
 Install selected skills from the central repository into `~/.cursor/skills/`. **Does not install slash commands** — run `bootstrap.sh` first for those.
 
@@ -24,7 +24,7 @@ GitHub is the **only** source of truth — never read from `~/.cursor/` as an in
 
 **1. Chat multiselect (default)** — After listing available skills from the central repo, use the **AskQuestion** tool with `allow_multiple: true` to present every skill in `skills/` as options. Wait for the user's selection before installing.
 
-**2. Inline in the user's message (skip prompt)** — If the user already named skills (e.g. `/configure-global ble-hack-skill`), use those names directly.
+**2. Inline in the user's message (skip prompt)** — If the user already named skills (e.g. `/configure-skills ble-hack-skill`), use those names directly.
 
 If the user selects nothing and named nothing, stop and ask which skills they want.
 
@@ -60,7 +60,7 @@ If the user selects nothing and named nothing, stop and ask which skills they wa
 | Command | Installs commands | Installs skills | Writes to project? |
 |---------|-------------------|-----------------|-------------------|
 | `bootstrap.sh` | All | No | No |
-| `/configure-global` | No | Selected (user picks) | No |
+| `/configure-skills` | No | Selected (user picks) | No |
 | `/pull-skill` | No | Matched from project | Yes |
 | `/commit-skill` | All (refresh) | Published only | No (reads project) |
 
@@ -72,4 +72,4 @@ If the user selects nothing and named nothing, stop and ask which skills they wa
 * `[+] Installing <skill-name> to ~/.cursor/skills/...` (per skill)
 * `[+] Cleanup complete.`
 
-This command will be available in chat with /configure-global
+This command will be available in chat with /configure-skills

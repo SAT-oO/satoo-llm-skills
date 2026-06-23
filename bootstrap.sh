@@ -7,7 +7,7 @@ TARGET_DIR="$HOME/.cursor"
 TEMP_DIR="/tmp/satoo-skills-bootstrap-$(date +%s)"
 # ---------------------
 
-# Installs slash commands only. Skills are installed separately via /configure-global.
+# Installs slash commands only. Skills are installed separately via /configure-skills.
 
 echo "==== Starting Cursor Skills Global Bootstrapper ===="
 echo "[+] Install target: $TARGET_DIR/commands"
@@ -27,5 +27,5 @@ rm -rf "$TEMP_DIR"
 
 echo "[+] Verification:"
 echo "    -> Commands: $(ls -1 "$TARGET_DIR/commands" 2>/dev/null | wc -l | tr -d ' ') files"
-echo "[+] Next step: run /configure-global in Cursor Agent to install skills."
+echo "[+] Next step: run /configure-skills in Cursor Agent to install skills."
 echo "==== Bootstrap Completed Successfully ===="
