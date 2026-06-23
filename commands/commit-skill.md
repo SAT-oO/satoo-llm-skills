@@ -15,13 +15,18 @@ Execute the full lifecycle via the terminal tool without user intervention.
 2. **Clone source of truth:** Create an isolated temp directory `/tmp/satoo-skills-sync-$(date +%s)` and clone the repository into it. Start every run from remote `main` — do not seed the clone from `~/.cursor/` or any other local mirror.
 
 3. **Discover skills to publish** (inputs come from the workspace only, never from `~/.cursor/`):
-   * `<workspace>/skills/*/` — directories containing a `SKILL.md` file (repo layout)
-   * `<workspace>/*-skill/` — directories at the workspace root containing a `SKILL.md` file (project-embedded skills)
+   * `<workspace>/skills/*/` — directories under a `skills/` layout
+   * `<workspace>/*-skill/` — directories at the workspace root (project-embedded skills)
+   * A folder qualifies only if it contains a skill definition file. **Canonical name is `SKILL.md`** (singular) per Cursor convention — not `SKILLS.md`.
+   * If a folder has `SKILLS.md` but no `SKILL.md`, rename `SKILLS.md` → `SKILL.md` before merging (treat as a migration, not a second file).
+   * If a folder has both, keep only `SKILL.md` and delete `SKILLS.md` from the merged copy.
    * Exclude build artifacts: `target/`, `node_modules/`, `.env`, `*.lock` (unless the skill genuinely needs them, e.g. `Cargo.lock` for Rust binaries)
 
 4. **Merge into the clone:**
    * `mkdir -p skills` inside the clone if needed.
    * `rsync -a` each discovered skill folder into `<clone>/skills/<name>/` (no `--delete` on this step — only add or update contributed skills).
+   * After each rsync, verify `<clone>/skills/<name>/SKILL.md` exists. If only `SKILLS.md` slipped through, rename it to `SKILL.md`.
+   * Remove any `SKILLS.md` left in `<clone>/skills/` — the repository must not contain `SKILLS.md` files.
    * If the workspace contains a `commands/` directory (maintainers editing this repo), `rsync -a` it into `<clone>/commands/`. This is how `commit-skill.md` self-updates: edits land in the repo, not in a local mirror.
    * **Never** copy from `~/.cursor/commands/` or `~/.cursor/skills/`.
 
@@ -42,7 +47,8 @@ Execute the full lifecycle via the terminal tool without user intervention.
 Log progress using this schema:
 * `[+] Resolving active workspace...`
 * `[+] Cloning source of truth from satoo-llm-skills...`
-* `[+] Discovering workspace skills to publish...`
+* `[+] Discovering workspace skills to publish (SKILL.md convention)...`
+* `[+] Normalizing skill filenames (SKILLS.md → SKILL.md if needed)...`
 * `[+] Merging skills (and commands, if present) into repository tree...`
 * `[+] Pushing to GitHub...` (or `[=] No changes to push`)
 * `[+] Installing commands/ and skills/ from repository to ~/.cursor/...`

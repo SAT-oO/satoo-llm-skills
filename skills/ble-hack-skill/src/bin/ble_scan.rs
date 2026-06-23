@@ -282,7 +282,7 @@ fn print_report(devices: &[ScannedDevice], brand: Option<&str>, product: Option<
         }
         println!("\nRe-run with --discover to connect and enumerate full GATT table.");
     } else {
-        println!("\nNo strong candidate found. Use core-loop protocol discovery (see SKILLS.md).");
+        println!("\nNo strong candidate found. Use core-loop protocol discovery (see SKILL.md).");
     }
 }
 

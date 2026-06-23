@@ -26,22 +26,42 @@ User input (device address, product name, captures) **accelerates** the run but 
 
 ## Automated Pipeline (Run in Order)
 
+**Requires Bluetooth host permissions** (not sandbox). On macOS, run from a terminal with BLE access.
+
 ```
-STEP 0  cd ble-hack-skill && cargo run --bin ble_scan [--brand X] [--product Y] [--discover] [--output scan_results.md]
-STEP 1  Web-verify top candidate manufacturer + product category
-STEP 2  Create FINDINGS.md (Configuration + Scan Results sections)
-STEP 3  Research pass (buttplug, GitHub, FCC) → Research Notes in FINDINGS.md
-STEP 4  Connect transport; subscribe Tx; discover Rx/Tx UUIDs if not from scan
-STEP 5  Discover frame header (no assumed 0x55)
-STEP 6  Verify handshake; confirm reset-on-repeat with user
-STEP 7  Sweep commands (most likely → least likely); classify responses
-STEP 8  Verify each interesting command in an isolated round
-STEP 9  Update FINDINGS.md after every experiment
+STEP 0  cargo run --bin ble_scan -- --brand X --product Y --discover --output scan_results.md
+        → pick UUID; confirm FFE1/FFE2 on target
+STEP 1  Research buttplug + GitHub + official app name (before byte sweeps)
+        → note OEM stack, likely tail types (CRC / AA / 00)
+STEP 2  cargo run --bin ble_probe -- --device UUID --auto --output test_results.md
+        → note echo/ack opcodes; do NOT mark verified
+STEP 3  cargo run --bin ble_sweep -- --device UUID --output sweep_results.md
+        → if tails unclear: sweep CRC, AA, zero-tail per opcode
+STEP 4  Write verify_plan.json from probe hits (≤15 checkpoints, all families + stops)
+STEP 5  cargo run --bin ble_verify -- --device UUID --plan verify_plan.json
+        → user observes movement; y/n/r/q each checkpoint
+STEP 6  Write FINDINGS.md from verify_results.md success rows only
 ```
 
-**If Step 0 yields a PRIMARY or CANDIDATE device**, proceed with Steps 1–9 on that target.
+**One-go invocation:** `/ble-hack-skill` → run Steps 0–4, draft `verify_plan.json`, **stop for Step 6 with user present**, then Step 7.
 
-**If Step 0 yields only SKIP / LOW devices**, fall back to the [Core Loop](#core-loop-fallback) — broader scan, manual brand/product flags, generic header probes, user confirmation of physical behavior.
+**If Step 0 yields only SKIP / LOW devices**, fall back to the [Core Loop](#core-loop-fallback).
+
+---
+
+## Anti-patterns — do not repeat
+
+These caused a wrong Jetpack protocol despite plausible BLE logs. **Hard rules:**
+
+1. **Never write FINDINGS.md before `ble_verify` completes.** Probes produce candidates only.
+2. **Never mark a command verified because Tx echoed it.** Wrong frames can echo. Confirm **physical movement** (y at checkpoint).
+3. **Never assume one tail byte for all opcodes.** On KooSync/Svakom-style devices: test **fixed `AA`**, **CRC-8 C2** (`frame_with_crc`), and **fixed `00`** separately per opcode.
+4. **Never skip opcode families.** If research names an official app, sweep its primary path first (e.g. Boost `0x04` before guessing `0x08`).
+5. **Never map bytes from echo alone.** Validate byte semantics with isolated checkpoints (one family at a time).
+6. **Never treat status/battery byte changes as motor proof.** Read `55 02 …` for SOC; dropping byte ≠ thrust confirmed.
+7. **Never merge tail families in one verify checkpoint.** Boost (AA), stretch (CRC `p1=0x00`), M-mode (CRC `p1=0x03`) are separate rows in `verify_plan.json`.
+
+When probe says **echo** → add to `verify_plan.json`, not FINDINGS.md.
 
 ---
 
@@ -86,6 +106,22 @@ Most BLE noise in a home/office is Apple/Microsoft/Samsung devices. A powered-on
 - Often exposes **UART-style** 16-bit UUIDs `0xFFE0`–`0xFFE2`
 
 This alone locates the target often enough to skip manual address entry.
+
+---
+
+## Step 6: Human verification (`ble_verify`)
+
+**Required before FINDINGS.md.**
+
+```bash
+cargo run --bin ble_verify -- --device UUID --plan verify_plan.json --output verify_results.md
+```
+
+1. User watches device during each checkpoint burst.
+2. Compare to `expect` in plan — thrust, stop, vibration, etc.
+3. Press **y** / **n** / **r** / **q** (see README).
+
+Draft plan from `verify_plan.example.json`. ≤15 checkpoints. Include stop command per family. Only **y** rows → FINDINGS.md.
 
 ---
 
@@ -192,16 +228,16 @@ Pattern C (variable):     [LEN] [PAYLOAD...] [CHK]
 
 | Class | Meaning | Action |
 |-------|---------|--------|
-| **echo** | response == sent | Dead end for control |
-| **standard ack** | fixed short ack | Usually query-only |
-| **fixed blob** | same long response | Device info |
-| **status read** | stable marker byte | Read-only |
-| **silent** | no notification | Wrong shape/channel |
+| **echo** | response == sent | **Inconclusive** — queue for `ble_verify`; do not mark verified |
+| **standard ack** | fixed short ack | Query candidate — verify read semantics with user |
+| **fixed blob** | same long response | Device info — verify once, usually read-only |
+| **status read** | stable marker byte | Read-only; status delta alone is **not** motor proof |
+| **silent** | no notification | Wrong shape/channel — try other tail or channel |
 | **idle** | default loop | Pre-init or wrong channel |
-| **non-standard** | unusual length/bytes | **Investigate** |
-| **physical only** | moves, BLE unchanged | **Critical** — document physical effect |
+| **non-standard** | unusual length/bytes | Queue for `ble_verify` |
+| **physical only** | moves, BLE unchanged | **Verified motor path** — still run `ble_verify` to capture hex |
 
-Only **non-standard** and **physical-only** deserve new command rows or probe sections.
+Only **ble_verify success** rows go into FINDINGS.md. Echo and non-standard are **candidates only**.
 
 ---
 
@@ -221,14 +257,13 @@ Do **not** re-sweep dead ends. Always ask user about **physical movement** when 
 
 ## Per-Command Verification
 
-For each **non-standard** or **physical-only** result:
+Replaced by **`ble_verify`** (Step 6). Do not batch-verify in one headless run.
 
-1. Fresh connection + full handshake
-2. **Single** command under test (+ optional status read)
-3. User confirms movement / suction / heat / LED / sound
-4. Document: sent hex, response hex, status after, physical effect, repeatable across reconnects
+For each checkpoint in `verify_plan.json`:
 
-Never batch-verify interesting commands in one run.
+1. Single command under test (+ optional stop frame)
+2. User selects **y / n / r / q** at terminal
+3. Success → row in FINDINGS.md; Error → revise plan and re-probe
 
 ---
 
@@ -257,160 +292,141 @@ Open question template:
 
 ## FINDINGS.md Specification (Authoritative)
 
-Any LLM writing `FINDINGS.md` **must** follow this structure. Sections appear **in this order**. Use `{Product}` / `{Brand}` placeholders until confirmed. Update after **every** experiment.
+Copy `FINDINGS.template.md` as the starting point. Any LLM writing `FINDINGS.md` **must** follow that structure.
 
-### Required sections
+**Principle:** FINDINGS.md is a **verified success command set** only. Scan logs, research, dead ends, and probe grids go in auxiliary files — not FINDINGS.md.
+
+### Required sections (in order)
 
 #### 1. Title
 
 ```markdown
-# {Brand} {Product} — BLE Control Reference
+# {Brand} {Product} — Verified BLE Commands
 ```
 
-#### 2. Connection (table)
+Opening line: document only commands that work; exclude rejected/no-action probes.
+
+#### 2. Device Info
 
 | Item | Value |
-| ---- | ----- |
-| Device UUID | `{macOS UUID or MAC from ble_scan}` |
-| Device name | `{local_name from advertisement}` |
-| Manufacturer | `0x{ID}` — {verified company name from web} |
-| Rx (write) | `0x....` — write-without-response or write-with-response |
-| Tx (notify) | `0x....` |
+| --- | --- |
+| Brand | … |
+| Product | … |
+| Internal model | … (omit row if unknown) |
+| Product code | … (omit if unknown) |
+| Official app | … |
 
-**Rules:** Rx = characteristic accepting command writes. Tx = characteristic with notify/indicate for responses. State write type explicitly. Include scan tier (`PRIMARY`/`CANDIDATE`) and date if useful.
+#### 3. BLE UUID
 
-#### 3. Scan Results (table) — fill from `ble_scan` / `scan_results.md`
+| Role | UUID |
+| --- | --- |
+| Service | full 128-bit UUID |
+| Write | Rx characteristic |
+| Notify | Tx characteristic |
 
-| tier | device_id | name | mfg_id | rssi | notes |
-| ---- | --------- | ---- | ------ | ---- | ----- |
+#### 4. Frame Format
 
-One row per scanned device; highlight selected target.
+- Layout: `55 <cmd> <p0> <p1> <p2> <p3> <tail>`
+- Table: command family → tail rule (CRC-8 C2, fixed `AA`, fixed `00`, …)
+- If CRC-8 C2 applies, document poly/init/xorout/refin/refout; use `src/crc.rs` when probing
 
-#### 4. Research Notes (bullets)
+**Do not assume one tail byte for all opcodes.** KooSync/Jetpack uses CRC on `0x08` and fixed `AA` on `0x04`.
 
-- buttplug / GitHub / web sources with URLs
-- Comparable devices and framing hypotheses
-- Header byte hypothesis + evidence status: confirmed / refuted / open
+#### 5+. One `##` section per verified command family
 
-#### 5. Session Start (handshake)
+Each confirmed family (Boost, Direct Stretch, M-modes, battery query, status query, …) gets:
 
-Prose: whether handshake is **required** for control or only mirrors app connect behavior.
+- **Command format** — hex pattern with named fields
+- **Field table** — range and meaning
+- **Verified commands** — `{key} | Command | Effect` (or Query / Response for reads)
+- **Confirmed behavior** — user-verified bullets only
 
-```rust
-const HANDSHAKE: [&[u8]; N] = [
-    &[0x.., ...], // phase label
-];
-```
+#### Last: Implementation Notes (optional)
 
-- Timing: gap between frames (e.g. ~80 ms), total window (e.g. &lt;250 ms)
-- **Reset-on-repeat:** yes / no / not tested (user-confirmed)
+Short table: use case → family → hex pattern.
 
-#### 6. Frame Layout
+---
 
-ASCII diagram of byte positions with confirmed names:
+### Explicitly excluded from FINDINGS.md
 
-```
-[HDR] [opcode] [subcmd] [P1] [P2] [P3] [suffix]
-```
-
-Table mapping bytes to semantics per opcode family when known.
-
-**Rules:** Use confirmed `[HDR]` — never default to `55` without evidence. Note sustain rule if motor commands must repeat (~50 ms).
-
-#### 7. Stop Sequence (when applicable)
-
-Hex frames + Rust `const STOP` block. Note whether ceasing commands without stop burst halts the motor.
-
-#### 8. Motor / Actuator Commands
-
-Per effect (vibrate, suction, lick, heat, etc.):
-
-- Hex pattern with byte semantics
-- Rust `const` arrays for levels/modes
-- What Tx echoes vs what status read returns
-- Confirmed physical effects (user-verified)
-
-#### 9. Status Read
-
-```
-55 02 01 00 00 00 00   ← example; use confirmed bytes
-```
-
-Document marker bytes (e.g. idle `0x50` vs post-burst `0x46`).
-
-#### 10. Command Channel Reference (table)
-
-For channels that are not motor-specific (info, echo, mode query):
-
-| opcode | subcmd | suffix | purpose | notes |
-| ------ | ------ | ------ | ------- | ----- |
-
-**Cell style:** short — `echo only`, `read-only`, `standard ack only`. Never combine `echo only` with `status unchanged`.
-
-#### 11. Probe Commands (when replay set exists)
-
-- One-line frame convention
-- Rust `const PROBES` or `TYPE_PROBES` block with comments
-- Table: `label | hex`
-- Burst test results table if run:
-
-| label | sent | BLE ack | status after | physical effect |
-
-#### 12. Example Responses (optional)
-
-| opcode | subcmd | sent | response |
-
-Use only for non-obvious frames.
-
-#### 13. Protocol Model (Current)
-
-```
-[HDR] [TYPE] [SUB] [P1] [P2] [P3] [P4]
-TYPE xx → one-line behavior
-```
-
-Update when a new opcode role is confirmed.
-
-#### 14. Dead Ends (Automated Session)
-
-| test | result |
-
-Short, final — no hedging. Move exhausted paths here; remove from open questions.
-
-#### 15. Open Questions / Next Steps
-
-Bullet list — usually app capture, unmapped opcodes, stop command, param semantics.
+| Old section | New home |
+| --- | --- |
+| Scan Results | `scan_results.md` |
+| Research Notes | agent / `test_results.md` |
+| Session Start | only if verified required |
+| Dead Ends / Open Questions | omit |
+| Protocol Model | omit |
+| Rust `const` blocks | use spaced hex in tables |
 
 ---
 
 ### FINDINGS.md style rules
 
-- **Table-first** — facts in tables, not lab-note prose
-- **Hex in backticks** — spaced hex in tables when helpful: `` `55 09 01 00 00 00 00` ``
-- **Separate facts from hypothesis** — confirmed rows vs open questions
-- **Physical effects** — user-confirmed movement overrides BLE-only "no change"
-- **No template overwrite** — merge `test_results.md` by hand; do not auto-regenerate curated sections
-- **Living doc** — timestamp or session note when a section materially changes
+- **Verified only** — NACK or no movement → not in FINDINGS.md
+- **Hex in fenced blocks or tables**
+- **Name fields** in patterns (`<mode>`, `<scale>`, `<travel>`, `<CRC>`)
+- **Effect column** requires user-confirmed physical result, not BLE echo alone
+- **One section per actuator family**, not one merged opcode table
 
-### Auxiliary file: `test_results.md`
+### Auxiliary files
 
-Simple machine-generated table from last probe run:
+| File | Contents |
+| --- | --- |
+| `scan_results.md` | Full scan from `ble_scan` |
+| `test_results.md` | Probe grid from `ble_probe` |
+| `sweep_results.md` | Parameter sweep from `ble_sweep` |
+| `verify_results.md` | Human gate from `ble_verify` — **source of truth for FINDINGS.md** |
+| `verify_plan.json` | Checkpoint script for Step 6 |
 
-| label | sent | response | status_after |
+Merge **success** rows from `verify_results.md` into FINDINGS.md; never from probe grids alone.
 
-Does not replace `FINDINGS.md`; agent merges interesting rows into canonical sections.
+### Tail-byte discovery (agent)
+
+After header `0x55` is confirmed:
+
+1. Fixed `AA` — e.g. `55 04 00 00 00 {scale} AA` (Boost on KooSync)
+2. CRC-8 C2 — `frame_with_crc([55, cmd, p0, p1, p2, p3])` (Stretch / M-mode)
+3. Fixed `00` — legacy Svakom 7-byte (Klitty vibrate)
+
+Validate with **physical effect** — wrong tails may still echo on some firmware.
 
 ---
 
-## `ble_scan` Implementation Reference
+## `ble_scan` / `ble_probe` / `ble_sweep` / `ble_verify` Implementation Reference
 
-This folder ships the `ble_scan` binary (Rust + `btleplug`):
+This folder ships four Rust binaries (`btleplug` + `tokio`):
 
 | File | Role |
 | ---- | ---- |
 | `src/manufacturers.rs` | SIG company ID classify (major OEM vs niche vs unknown) |
+| `src/crc.rs` | CRC-8 C2 tail (`frame_with_crc`, `frame_with_aa`) |
+| `src/session.rs` | Shared connect, subscribe, send, burst, handshake |
 | `src/bin/ble_scan.rs` | Scan, rank, optional `--discover` GATT dump |
+| `src/bin/ble_probe.rs` | Header probes, opcode sweep, `--auto` pipeline, `--burst` |
+| `src/bin/ble_sweep.rs` | Single-session parameter grid with status before/after |
+| `src/bin/ble_verify.rs` | Interactive human verification gate (Step 6) |
+| `verify_plan.example.json` | Example checkpoint plan |
 | `Cargo.toml` | Dependencies |
+
+### `ble_verify` flags
+
+| Flag | Purpose |
+| ---- | ------- |
+| `--device UUID` | Target peripheral |
+| `--plan path` | JSON checkpoint plan (required) |
+| `--output path` | Write `verify_results.md` (default) |
+
+### `ble_probe` flags
+
+| Flag | Purpose |
+| ---- | ------- |
+| `--device UUID` | Target peripheral (from ble_scan) |
+| `--auto` | Full discovery: headers → opcode sweep → burst candidates |
+| `--channel ffe1` | Limit to one Rx/Tx pair |
+| `--header-sweep` / `--opcode-sweep` | Individual phases |
+| `--handshake` | Send Svakom-style 3-frame init before probes |
+| `--burst "55 …"` | Sustain frames for N seconds |
+| `--output path` | Write `test_results.md` |
 
 Flags: `--brand`, `--product`, `--seconds`, `--output`, `--discover`
 
@@ -427,18 +443,14 @@ Ranking scores (approximate):
 
 ## Checklist (Every Session)
 
-- [ ] `cd ble-hack-skill && cargo run --bin ble_scan` (+ `--discover`, `--output scan_results.md`)
-- [ ] Web-verify manufacturer for top candidate
-- [ ] Create/update `FINDINGS.md` § Connection + Scan Results
-- [ ] Research buttplug + web; subagent if needed
-- [ ] Discover frame header — **do not** assume `0x55`
-- [ ] Disconnect competing BLE apps
-- [ ] Verify handshake; ask user about reset-on-repeat
-- [ ] Sweep commands; classify every response
-- [ ] Isolated verification per interesting command
-- [ ] User confirms physical behavior per probe
-- [ ] Update command tables, dead ends, protocol model
-- [ ] Trim client to handshake + active probes only
+- [ ] `ble_scan --discover` → UUID + Rx/Tx UUIDs
+- [ ] Research app/OEM **before** sweeps
+- [ ] `ble_probe --auto` → candidates in `test_results.md`
+- [ ] `ble_sweep` if tails/families unclear
+- [ ] `verify_plan.json` drafted (all families + stops)
+- [ ] **`ble_verify` with user watching device**
+- [ ] FINDINGS.md ← success rows only
+- [ ] Official app disconnected during connect
 
 ---
 
@@ -452,16 +464,11 @@ Ranking scores (approximate):
 
 ---
 
-## Worked Example (Svakom Klitty — not a default)
+## Worked examples (not defaults)
 
-One device this skill was exercised on; **do not copy bytes to other brands** without confirmation.
+| Device | FINDINGS style | Key protocol facts |
+| ------ | -------------- | ------------------ |
+| Svakom Klitty | Verified commands | `0x55` 7-byte, tail `00`; opcodes `03`/`09`/`14`; sustain ~50 ms |
+| Kaotik Jetpack / HF470 | Verified commands | Boost `0x04` tail `AA`; Stretch/M `0x08` tail CRC-8 C2; see reference capture |
 
-| Phase | Outcome |
-|-------|---------|
-| Scan + name match | Device UUID + FFE1/FFE2 |
-| Research | `0x55` 7-byte UART hypothesis |
-| Handshake | 3-frame init; app-mirror, not strictly required for motor |
-| Motors | opcodes `03` vibrate, `09` suction, `14` lick; sustain ~50 ms |
-| Stop | burst `03`/`09`/`14` off-frames with bytes 4–5 zero |
-
-See a completed `FINDINGS.md` in the parent project for tone and density — but **this specification** is the normative source.
+Do not copy bytes across devices. See `FINDINGS.template.md` for output format.

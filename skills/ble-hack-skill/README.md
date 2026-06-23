@@ -1,6 +1,6 @@
 # ble-hack-skill
 
-Reverse-engineer BLE device protocols. Full spec: `SKILLS.md`. Output: `FINDINGS.md` (verified commands only).
+Reverse-engineer BLE device protocols. Full spec: `SKILL.md`. Output: `FINDINGS.md` (verified commands only).
 
 ## Workflow
 
@@ -56,4 +56,4 @@ Copy **success** rows from `verify_results.md` into `FINDINGS.md` using `FINDING
 - Treat status/battery byte changes as movement
 - Skip `ble_verify`
 
-See **Anti-patterns** in `SKILLS.md` for why.
+See **Anti-patterns** in `SKILL.md` for why.
