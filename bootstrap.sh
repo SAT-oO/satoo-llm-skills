@@ -7,29 +7,25 @@ TARGET_DIR="$HOME/.cursor"
 TEMP_DIR="/tmp/satoo-skills-bootstrap-$(date +%s)"
 # ---------------------
 
+# Installs slash commands only. Skills are installed separately via /configure-global.
+
 echo "==== Starting Cursor Skills Global Bootstrapper ===="
-echo "[+] Target Directory: $TARGET_DIR"
+echo "[+] Install target: $TARGET_DIR/commands"
 echo "[+] Source of truth: $REPO_URL"
 
-# 1. Ensure target structure exists
-mkdir -p "$TARGET_DIR/commands" "$TARGET_DIR/skills"
+mkdir -p "$TARGET_DIR/commands"
 
-# 2. Clone the central repository (remote is the only source of truth)
-echo "[+] Fetching remote skill configurations..."
-git clone --quiet --branch main "$REPO_URL" "$TEMP_DIR"
+echo "[+] Fetching commands from remote..."
+git clone --quiet --depth 1 --branch main --filter=blob:none --sparse "$REPO_URL" "$TEMP_DIR"
+git -C "$TEMP_DIR" sparse-checkout set commands
 
-# 3. Install only commands/ and skills/ from the repo — nothing else
-echo "[+] Installing commands from repository..."
+echo "[+] Installing slash commands..."
 rsync -a --delete "$TEMP_DIR/commands/" "$TARGET_DIR/commands/"
 
-echo "[+] Installing skills from repository..."
-rsync -a --delete "$TEMP_DIR/skills/" "$TARGET_DIR/skills/"
-
-# 4. Cleanup
-echo "[+] Purging temporary clone..."
+echo "[+] Removing temporary fetch..."
 rm -rf "$TEMP_DIR"
 
 echo "[+] Verification:"
 echo "    -> Commands: $(ls -1 "$TARGET_DIR/commands" 2>/dev/null | wc -l | tr -d ' ') files"
-echo "    -> Skills:   $(ls -1 "$TARGET_DIR/skills" 2>/dev/null | wc -l | tr -d ' ') packages"
+echo "[+] Next step: run /configure-global in Cursor Agent to install skills."
 echo "==== Bootstrap Completed Successfully ===="

@@ -2,29 +2,21 @@
 
 Central registry for Cursor skills and slash commands. GitHub is the source of truth.
 
-## Setup (once per machine)
+## Setup (two steps)
 
-Paste in terminal to install **all** skills and commands:
+**1. Terminal — install slash commands (once per machine):**
 
 ```bash
 curl -sSL https://raw.githubusercontent.com/SAT-oO/satoo-llm-skills/main/bootstrap.sh | bash
 ```
 
-Re-run anytime to refresh everything from GitHub.
+**2. Cursor Agent — install skills you need:**
 
----
+Run **`/configure-global`** and pick from the multiselect prompt.
 
-## Selective skills (no config files)
+Or name them inline: `/configure-global ble-hack-skill`
 
-Run **`/configure-global`** in Cursor Agent. You get a **multiselect prompt** in chat listing available skills from the registry — pick the ones you want.
-
-Or name them inline:
-
-```
-/configure-global ble-hack-skill
-```
-
-Installs only your selection (+ all slash commands) to `~/.cursor/`. Nothing added to your project repo.
+Re-run bootstrap to refresh commands. Re-run `/configure-global` to refresh skills.
 
 ---
 
@@ -47,16 +39,16 @@ Installs only your selection (+ all slash commands) to `~/.cursor/`. Nothing add
 
 | Command | When to run | What it does |
 |---------|-------------|--------------|
-| `/configure-global` | You want **some** skills, not all | Chat multiselect → installs chosen skills + commands to `~/.cursor/` |
+| `/configure-global` | After bootstrap, to install skills | Chat multiselect → chosen skills to `~/.cursor/skills/` |
 | `/pull-skill` | Skill copy needed **in** your project | GitHub → project `*-skill/` + `~/.cursor/skills/` |
-| `/commit-skill` | You changed a skill and want to publish | Project → GitHub + refreshes `~/.cursor/` |
+| `/commit-skill` | You changed a skill and want to publish | Project → GitHub + refresh commands & published skills |
 
-| | Installs | Project repo | `~/.cursor/` |
-|--|----------|--------------|--------------|
-| `bootstrap.sh` | All skills + commands | — | Yes |
-| `/configure-global` | Selected skills + commands | Nothing | Yes |
-| `/pull-skill` | Matched skills | Full copy | Yes |
-| `/commit-skill` | All (after push) | Read only | Yes |
+| | Commands | Skills | Project repo |
+|--|----------|--------|--------------|
+| `bootstrap.sh` | Install all | — | — |
+| `/configure-global` | — | Install selected | — |
+| `/pull-skill` | — | Install matched | Full copy |
+| `/commit-skill` | Refresh all | Install published | Read only |
 
 ---
 

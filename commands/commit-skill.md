@@ -34,12 +34,18 @@ Execute the full lifecycle via the terminal tool without user intervention.
    * If there are changes: `git add -A`, commit with `Automated sync: YYYY-MM-DD HH:MM:SS from <workspace-name>`, push to `origin main`.
    * If no changes: skip commit and push.
 
-6. **Install from repository:** After push (or if already up to date), install **only** `commands/` and `skills/` from the clone into the global Cursor path:
-   ```bash
-   rsync -a --delete "$CLONE/commands/" "$HOME/.cursor/commands/"
-   rsync -a --delete "$CLONE/skills/" "$HOME/.cursor/skills/"
-   ```
-   Do not rsync the full repo root into `~/.cursor/`.
+6. **Install from repository:** After push (or if already up to date):
+   * Refresh slash commands:
+     ```bash
+     rsync -a --delete "$CLONE/commands/" "$HOME/.cursor/commands/"
+     ```
+   * Install **only the published skills** (from step 3), not the entire registry:
+     ```bash
+     rsync -a --delete \
+       --exclude='target/' --exclude='node_modules/' --exclude='.env' \
+       "$CLONE/skills/<name>/" "$HOME/.cursor/skills/<name>/"
+     ```
+   Do not rsync the full repo root or all skills into `~/.cursor/`.
 
 7. **Cleanup:** `rm -rf` the temp clone.
 
@@ -51,7 +57,7 @@ Log progress using this schema:
 * `[+] Normalizing skill filenames (SKILLS.md → SKILL.md if needed)...`
 * `[+] Merging skills (and commands, if present) into repository tree...`
 * `[+] Pushing to GitHub...` (or `[=] No changes to push`)
-* `[+] Installing commands/ and skills/ from repository to ~/.cursor/...`
+* `[+] Installing commands/ and published skills to ~/.cursor/...`
 * `[+] Cleanup complete.`
 
 This command will be available in chat with /commit-skill
