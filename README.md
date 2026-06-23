@@ -1,59 +1,55 @@
 # satoo-llm-skills
 
-Central repository for custom Cursor skills. **GitHub is the single source of truth** — `~/.cursor/` is only an install target, never an input.
+Central registry for Cursor skills and slash commands. GitHub is the source of truth.
 
-## Repository layout
+## Setup (once per machine)
 
-```
-satoo-llm-skills/
-├── commands/
-│   ├── commit-skill.md      # Push workspace skills → GitHub
-│   └── pull-skill.md        # Pull GitHub skills → external project
-├── bootstrap.sh               # One-time setup: installs from GitHub → ~/.cursor/
-└── skills/                    # Skill packages (each folder ends with -skill)
-    └── ble-hack-skill/
-        └── SKILL.md
-```
-
-## For any developer — first-time setup
-
-Install commands and skills from GitHub (nothing is read from local copies):
+Paste in terminal:
 
 ```bash
 curl -sSL https://raw.githubusercontent.com/SAT-oO/satoo-llm-skills/main/bootstrap.sh | bash
 ```
 
-This installs:
-- `commands/` → `~/.cursor/commands/`
-- `skills/` → `~/.cursor/skills/`
+Installs slash commands and skills into `~/.cursor/`. Re-run anytime to refresh from GitHub.
 
-Re-run bootstrap any time you want to pull the latest from GitHub without publishing changes.
+---
 
-## Publishing a skill from your project
+## In your project
 
-1. In your project, create a folder named `*-skill` with a `SKILL.md` file (e.g. `my-database-skill/SKILL.md`).
-2. Run `/commit-skill` in Cursor Agent.
+### Option A — skills live in the project repo
 
-The command will:
-1. Clone this repo from GitHub
-2. Merge your workspace skill(s) into `skills/`
-3. Push to `main` if there are changes
-4. Reinstall `commands/` and `skills/` from the repo into `~/.cursor/`
+1. Add a `*-skill/` folder with `SKILL.md` (e.g. `ble-hack-skill/SKILL.md`).
+2. In Cursor Agent, run **`/configure-global`** on first open (installs matching skills globally).
+3. To publish changes → **`/commit-skill`**
+4. To get latest from GitHub → **`/pull-skill`**
 
-## Pulling a skill into your project
+### Option B — no skill files in the project repo
 
-If your project already has a `*-skill` folder and you want the latest version from this repo:
+1. Add `.cursor/satoo-skills.json`:
+   ```json
+   { "skills": ["ble-hack-skill"] }
+   ```
+2. In Cursor Agent, run **`/configure-global`**
+3. Re-run **`/configure-global`** when central skills update on GitHub.
 
-1. Run `/pull-skill` in Cursor Agent from that external project.
+---
 
-The command will:
-1. Clone this repo from GitHub
-2. Match workspace `*-skill` folders by name against `skills/` in the central repo
-3. Overwrite the project copy with the remote version
-4. Update `~/.cursor/skills/` for the pulled skill(s)
+## Agent commands
 
-This is the reverse of `/commit-skill` — use pull to consume updates, commit to publish changes.
+| Command | When to run | What it does |
+|---------|-------------|--------------|
+| `/configure-global` | New project, or after central skills update | Installs named skills + all commands to `~/.cursor/`. **No skill files added to your project.** |
+| `/pull-skill` | You want the latest skill copy **inside** your project | Pulls from GitHub → project `*-skill/` folder + `~/.cursor/skills/` |
+| `/commit-skill` | You changed a skill and want to publish | Pushes project `*-skill/` → GitHub + refreshes `~/.cursor/` |
+
+| | Project repo | `~/.cursor/` | GitHub |
+|--|--------------|--------------|--------|
+| `/configure-global` | Manifest only | Install | Read |
+| `/pull-skill` | Full skill copy | Install | Read |
+| `/commit-skill` | Read skill | Install | Write |
+
+---
 
 ## Maintaining this repo
 
-Edit skills under `skills/` or update `commands/commit-skill.md` directly in this repository, then run `/commit-skill`. The command publishes those changes to GitHub and reinstalls the updated command definition globally — no dependency on `~/.cursor/` as a source.
+Edit `skills/` or `commands/`, then run **`/commit-skill`** in Agent.
