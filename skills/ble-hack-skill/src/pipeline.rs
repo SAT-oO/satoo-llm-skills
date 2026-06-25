@@ -104,9 +104,9 @@ pub fn pick_target<'a>(
     viable.first().copied()
 }
 
-/// Automated gate before human verify: FFE1 channel + any non-silent motor-channel response.
+/// Automated gate: known motor channel + non-silent response on command probes.
 pub fn probe_passes_automation_gate(probe_md: &str) -> bool {
-    let mut has_ffe1 = false;
+    let mut has_motor_channel = false;
     let mut motor_response = false;
 
     for line in probe_md.lines() {
@@ -120,10 +120,13 @@ pub fn probe_passes_automation_gate(probe_md: &str) -> bool {
         let channel = parts[2];
         let sent = parts[3].trim_matches('`');
         let class = parts[5];
-        if !channel.contains("FFE1") {
+        let is_motor_channel = channel.contains("FFE1")
+            || channel.contains("AE01")
+            || channel.contains("ae01");
+        if !is_motor_channel {
             continue;
         }
-        has_ffe1 = true;
+        has_motor_channel = true;
         if sent.starts_with("(listen)") || sent.starts_with("(read)") {
             continue;
         }
@@ -132,7 +135,7 @@ pub fn probe_passes_automation_gate(probe_md: &str) -> bool {
         }
     }
 
-    has_ffe1 && motor_response
+    has_motor_channel && motor_response
 }
 
 /// True when probe markdown shows likely motor families (opcode 0x04 AA and/or 0x08 CRC grids).

@@ -7,9 +7,7 @@ use std::path::{Path, PathBuf};
 
 pub const SESSION_FILE: &str = "ble_session.json";
 pub const DEFAULT_PLAN: &str = "verify_plan.json";
-pub const EXTENDED_PLAN: &str = "verify_plan_extended.json";
 pub const DEFAULT_VERIFY_OUTPUT: &str = "verify_results.md";
-pub const EXTENDED_VERIFY_OUTPUT: &str = "verify_results_extended.md";
 pub const SCAN_RESULTS: &str = "scan_results.md";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

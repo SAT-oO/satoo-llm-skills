@@ -184,7 +184,10 @@ async fn run_auto(device: &str) -> Result<Vec<ProbeRow>> {
 
     let best = rows
         .iter()
-        .filter(|r| r.channel.contains("FFE1") && (r.class == "echo" || r.class == "non-standard"))
+        .filter(|r| {
+            (r.channel.contains("FFE1") || r.channel.contains("AE01"))
+                && (r.class == "echo" || r.class == "non-standard")
+        })
         .max_by_key(|r| score_row(r))
         .or_else(|| {
             rows.iter()
@@ -195,7 +198,7 @@ async fn run_auto(device: &str) -> Result<Vec<ProbeRow>> {
 
     let target_channel = channels
         .iter()
-        .find(|c| c.label.contains("FFE1"))
+        .find(|c| c.label.contains("FFE1") || c.label.contains("AE01"))
         .cloned()
         .or_else(|| {
             best.as_deref().and_then(|label| {

@@ -182,8 +182,6 @@ async fn run_discover_sweep(workdir: &Path, device_id: &str, force_offline: bool
             "ble_sweep",
             &[
                 "--offline",
-                "--profile",
-                "discover",
                 "--probe",
                 "test_results.md",
                 "--output",
@@ -199,8 +197,6 @@ async fn run_discover_sweep(workdir: &Path, device_id: &str, force_offline: bool
         &[
             "--device",
             device_id,
-            "--profile",
-            "discover",
             "--probe",
             "test_results.md",
             "--output",
@@ -219,8 +215,6 @@ async fn run_discover_sweep(workdir: &Path, device_id: &str, force_offline: bool
         "ble_sweep",
         &[
             "--offline",
-            "--profile",
-            "discover",
             "--probe",
             "test_results.md",
             "--output",

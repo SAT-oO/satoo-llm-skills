@@ -249,7 +249,12 @@ fn print_report(devices: &[ScannedDevice], brand: Option<&str>, product: Option<
         );
     }
 
-    if let Some(top) = devices.iter().find(|d| d.tier == "PRIMARY" || d.tier == "CANDIDATE") {
+    let top = devices
+        .iter()
+        .find(|d| d.tier != "SKIP" && d.brand_match)
+        .or_else(|| devices.iter().find(|d| d.tier == "PRIMARY"))
+        .or_else(|| devices.iter().find(|d| d.tier == "CANDIDATE"));
+    if let Some(top) = top {
         println!("\n=== Recommended target ===");
         println!("Device ID:  {}", top.id);
         println!("Name:       {}", top.local_name.as_deref().unwrap_or("—"));

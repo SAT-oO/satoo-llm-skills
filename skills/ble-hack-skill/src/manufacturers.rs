@@ -28,6 +28,11 @@ pub fn classify(id: Option<u16>) -> OemClass {
     OemClass::Unknown
 }
 
+/// Known BLE local names for products whose advertisement omits the marketing brand.
+const PRODUCT_BLE_ALIASES: &[(&str, &[&str])] = &[
+    ("kisstoy", &["ply5", "ply", "polly"]),
+];
+
 /// Returns true when brand or product appears in `local_name` (case-insensitive).
 pub fn name_matches(brand: &str, product: Option<&str>, local_name: Option<&str>) -> bool {
     let Some(name) = local_name else {
@@ -42,6 +47,13 @@ pub fn name_matches(brand: &str, product: Option<&str>, local_name: Option<&str>
         let product_l = product.to_ascii_lowercase();
         if name_l.contains(&product_l) || product_l.contains(&name_l) {
             return true;
+        }
+    }
+    for (alias_brand, names) in PRODUCT_BLE_ALIASES {
+        if brand_l.contains(alias_brand) || alias_brand.contains(&brand_l) {
+            if names.iter().any(|n| name_l.contains(n)) {
+                return true;
+            }
         }
     }
     false
@@ -71,8 +83,8 @@ const MAJOR_CONSUMER_OEMS: &[u16] = &[
 
 /// Known intimate-wellness / niche product OEM company IDs (expand as confirmed).
 const NICHE_PRODUCT_OEMS: &[(u16, &str)] = &[
-    // Many products use generic UART modules; brand often appears in local_name instead.
-    // Add confirmed SIG IDs here as they are verified on hardware.
+    // KissToy Polly line — Jieli JLAISDK in manufacturer data (0x05D6).
+    (0x05D6, "KissToy/Jieli"),
 ];
 
 const COMPANY_NAMES: &[(u16, &str)] = &[

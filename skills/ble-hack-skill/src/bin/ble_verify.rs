@@ -40,6 +40,13 @@ const SVAKOM_HANDSHAKE: [&[u8]; 3] = [
     &[0x55, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00],
 ];
 
+const FREDORCH_HANDSHAKE: [&[u8]; 2] = [
+    &[0x55, 0x03, 0x99, 0x9C, 0xAA],
+    &[0x55, 0x09, 0x21, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x2A, 0xAA],
+];
+
+const JLAISDK_INIT: [u8; 7] = [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Verdict {
     Success,
@@ -51,6 +58,9 @@ enum Verdict {
 struct Plan {
     #[serde(default)]
     handshake: bool,
+    /// `fredorch` | `jlaisdk` — sent before checkpoints when set.
+    #[serde(default)]
+    handshake_type: Option<String>,
     #[serde(default = "default_sustain_ms")]
     sustain_ms: u64,
     #[serde(default)]
@@ -72,6 +82,12 @@ struct Checkpoint {
     /// Query/read commands: single send, no sustain burst.
     #[serde(default)]
     one_shot: bool,
+    /// Override plan-level channel for this checkpoint (`ae01`, `ae3b`, …).
+    #[serde(default)]
+    channel: Option<String>,
+    /// Optional explicit write characteristic UUID (overrides channel Rx).
+    #[serde(default)]
+    write_uuid: Option<String>,
 }
 
 fn default_sustain_ms() -> u64 {
@@ -120,16 +136,30 @@ async fn main() -> Result<()> {
 
     let channel = resolve_channel(plan.channel.as_deref());
     let adpt = adapter().await?;
-    let session = connect(&adpt, &device, &channel).await?;
+    let mut session = connect(&adpt, &device, &channel).await?;
     let mut notifications = session.peripheral.notifications().await?;
+    let mut active_channel = channel.label.clone();
 
     println!("Connected. Human verification — watch the device.\n");
-    if plan.handshake {
+    if let Some(ht) = plan.handshake_type.as_deref() {
+        match ht {
+            "fredorch" => {
+                send_handshake(&session, &mut notifications, &FREDORCH_HANDSHAKE).await?;
+                println!("Fredorch handshake sent.\n");
+            }
+            "jlaisdk" => {
+                let _ = send_and_wait(&session, &mut notifications, &JLAISDK_INIT).await?;
+                println!("JLAISDK init (00×7) sent.\n");
+            }
+            other => anyhow::bail!("unknown handshake_type: {other}"),
+        }
+    } else if plan.handshake {
         send_handshake(&session, &mut notifications, &SVAKOM_HANDSHAKE).await?;
-        println!("Handshake sent.\n");
+        println!("Svakom handshake sent.\n");
     }
 
     let sustain = Duration::from_millis(plan.sustain_ms);
+    let _ = sustain;
     let mut results = Vec::new();
     let mut idx = 0usize;
 
@@ -161,25 +191,53 @@ async fn main() -> Result<()> {
         let frame = parse_hex(&cp.burst_hex)?;
         println!("Send: `{}`", spaced_hex(&frame));
 
+        let cp_channel = cp
+            .channel
+            .as_deref()
+            .or_else(|| {
+                cp.write_uuid.as_deref().and_then(|w| {
+                    if w.to_ascii_lowercase().contains("ae3b") {
+                        Some("ae3b")
+                    } else if w.to_ascii_lowercase().contains("ae01") {
+                        Some("ae01")
+                    } else {
+                        None
+                    }
+                })
+            });
+        if let Some(ch) = cp_channel {
+            let pair = resolve_channel(Some(ch));
+            if pair.label != active_channel {
+                session.peripheral.disconnect().await?;
+                session = connect(&adpt, &device, &pair).await?;
+                notifications = session.peripheral.notifications().await?;
+                active_channel = pair.label.clone();
+                if plan.handshake_type.as_deref() == Some("jlaisdk") {
+                    let _ = send_and_wait(&session, &mut notifications, &JLAISDK_INIT).await?;
+                }
+            }
+        }
+
         let sent_label = if cp.one_shot {
-            send_and_wait(&session, &mut notifications, &frame).await?;
+            send_on_session(&session, &mut notifications, &frame).await?;
             time::sleep(Duration::from_millis(300)).await;
             spaced_hex(&frame)
         } else {
-            send_burst(
+            send_burst_on_session(
                 &session,
                 &mut notifications,
-                &[frame.clone()],
+                &frame,
                 Duration::from_secs(cp.burst_seconds),
+                plan.sustain_ms,
             )
             .await?;
             format!("{} ({}s burst)", spaced_hex(&frame), cp.burst_seconds)
         };
 
         if let Some(stop) = &cp.stop_hex {
-            time::sleep(sustain).await;
+            time::sleep(Duration::from_millis(plan.sustain_ms)).await;
             let stop_frame = parse_hex(stop)?;
-            send_and_wait(&session, &mut notifications, &stop_frame).await?;
+            send_on_session(&session, &mut notifications, &stop_frame).await?;
             println!("Stop: `{}`", spaced_hex(&stop_frame));
             time::sleep(Duration::from_millis(500)).await;
         }
@@ -243,9 +301,10 @@ async fn main() -> Result<()> {
     } else if ok > 0 {
         println!("Only SUCCESS rows may be copied into FINDINGS.md.");
         println!(
-            "Regenerate: cargo run -p ble-hack-skill --bin ble_findings -- --workdir {} --brand \"{}\"",
+            "Regenerate: cargo run -p ble-hack-skill --bin ble_check -- --workdir {} --brand \"{}\" --product \"{}\"",
             workdir.display(),
-            brand
+            brand,
+            product
         );
     } else {
         println!("No SUCCESS rows — FINDINGS.md not updated.");
@@ -267,8 +326,44 @@ fn resolve_channel(name: Option<&str>) -> ChannelPair {
             rx: uuid_from_u16(0xAE01),
             tx: uuid_from_u16(0xAE02),
         },
+        Some("ae3b") | Some("AE3B") => ChannelPair {
+            label: "AE3B/AE3C".into(),
+            rx: uuid_from_u16(0xAE3B),
+            tx: uuid_from_u16(0xAE3C),
+        },
+        Some("ae10") | Some("AE10") => ChannelPair {
+            label: "AE10/AE02".into(),
+            rx: uuid_from_u16(0xAE10),
+            tx: uuid_from_u16(0xAE02),
+        },
+        Some("ae03") | Some("AE03") => ChannelPair {
+            label: "AE03/AE05".into(),
+            rx: uuid_from_u16(0xAE03),
+            tx: uuid_from_u16(0xAE05),
+        },
         _ => default_channel(),
     }
+}
+
+async fn send_on_session(
+    session: &ble_hack_skill::session::Session,
+    notifications: &mut (impl futures::StreamExt<Item = btleplug::api::ValueNotification> + Unpin),
+    frame: &[u8],
+) -> Result<()> {
+    send_and_wait(session, notifications, frame).await?;
+    Ok(())
+}
+
+async fn send_burst_on_session(
+    session: &ble_hack_skill::session::Session,
+    notifications: &mut (impl futures::StreamExt<Item = btleplug::api::ValueNotification> + Unpin),
+    frame: &[u8],
+    duration: Duration,
+    sustain_ms: u64,
+) -> Result<()> {
+    let _ = sustain_ms;
+    send_burst(session, notifications, &[frame.to_vec()], duration).await?;
+    Ok(())
 }
 
 fn parse_hex(s: &str) -> Result<Vec<u8>> {

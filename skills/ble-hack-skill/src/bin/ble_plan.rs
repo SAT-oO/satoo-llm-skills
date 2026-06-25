@@ -25,7 +25,7 @@ fn main() -> Result<()> {
     let plan = draft_verify_plan_from_sweep(&rows, &analysis);
 
     if plan.checkpoints.is_empty() {
-        anyhow::bail!("no sweep hits — run ble_probe then ble_sweep --profile discover");
+        anyhow::bail!("no sweep hits — run ble_probe then ble_sweep");
     }
 
     let plan_path = workdir.join(workdir::DEFAULT_PLAN);

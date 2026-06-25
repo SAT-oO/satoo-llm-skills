@@ -18,6 +18,11 @@ pub fn static_channels() -> Vec<ChannelPair> {
             tx: uuid_from_u16(0xAE02),
         },
         ChannelPair {
+            label: "AE03/AE05".into(),
+            rx: uuid_from_u16(0xAE03),
+            tx: uuid_from_u16(0xAE05),
+        },
+        ChannelPair {
             label: "FFA1/FFA2".into(),
             rx: uuid_from_u16(0xFFA1),
             tx: uuid_from_u16(0xFFA2),

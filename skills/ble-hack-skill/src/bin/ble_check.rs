@@ -101,9 +101,3 @@ fn run() -> Result<bool> {
 
     Ok(eval.ready_for_findings)
 }
-
-fn arg_value(args: &[String], flag: &str) -> Option<String> {
-    args.iter()
-        .position(|a| a == flag)
-        .and_then(|i| args.get(i + 1).cloned())
-}

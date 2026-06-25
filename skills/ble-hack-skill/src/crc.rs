@@ -26,6 +26,25 @@ pub fn frame_with_crc(bytes: [u8; 6]) -> [u8; 7] {
     [bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], crc]
 }
 
+/// 4-byte frame checksum: sum of first three bytes (Pattern B default).
+pub fn chk_sum3(b: [u8; 3]) -> u8 {
+    (b[0] as u16 + b[1] as u16 + b[2] as u16) as u8
+}
+
+/// Hismith-style: sum of bytes 1 and 2.
+pub fn chk_sum2(b1: u8, b2: u8) -> u8 {
+    (b1 as u16 + b2 as u16) as u8
+}
+
+pub fn frame4(hdr: u8, cmd: u8, val: u8) -> [u8; 4] {
+    let chk = chk_sum3([hdr, cmd, val]);
+    [hdr, cmd, val, chk]
+}
+
+pub fn frame4_xor(hdr: u8, cmd: u8, val: u8) -> [u8; 4] {
+    [hdr, cmd, val, hdr ^ cmd ^ val]
+}
+
 /// Build a 7-byte frame with fixed `0xAA` tail (common on AA-suffix UART families).
 pub fn frame_with_aa(bytes: [u8; 6]) -> [u8; 7] {
     [

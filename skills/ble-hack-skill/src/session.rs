@@ -166,6 +166,61 @@ pub async fn connect(
     Err(anyhow!("Device not found: {device_id}"))
 }
 
+/// Scan once, connect immediately when `device_id` appears (avoids cache miss after standalone scan).
+pub async fn connect_fresh(
+    adapter: &Adapter,
+    device_id: &str,
+    channel: &ChannelPair,
+    scan_seconds: u64,
+) -> Result<Session> {
+    adapter.start_scan(ScanFilter::default()).await?;
+    let deadline = time::Instant::now() + Duration::from_secs(scan_seconds);
+    loop {
+        if let Some(peripheral) = adapter
+            .peripherals()
+            .await?
+            .into_iter()
+            .find(|p| p.id().to_string().eq_ignore_ascii_case(device_id))
+        {
+            adapter.stop_scan().await?;
+            peripheral.connect().await?;
+            peripheral.discover_services().await?;
+
+            let rx_char = peripheral
+                .characteristics()
+                .into_iter()
+                .find(|c| c.uuid == channel.rx)
+                .ok_or_else(|| anyhow!("Rx {} not found on device", channel.rx))?;
+            let tx_char = peripheral
+                .characteristics()
+                .into_iter()
+                .find(|c| c.uuid == channel.tx)
+                .ok_or_else(|| anyhow!("Tx {} not found on device", channel.tx))?;
+
+            let _ = peripheral.notifications().await?;
+            peripheral.subscribe(&tx_char).await?;
+            time::sleep(Duration::from_millis(200)).await;
+
+            return Ok(Session {
+                peripheral,
+                rx_char,
+                tx_char,
+                channel: ChannelPair {
+                    label: channel.label.clone(),
+                    rx: channel.rx,
+                    tx: channel.tx,
+                },
+            });
+        }
+        if time::Instant::now() >= deadline {
+            break;
+        }
+        time::sleep(Duration::from_millis(200)).await;
+    }
+    adapter.stop_scan().await?;
+    Err(anyhow!("Device not found during fresh scan: {device_id}"))
+}
+
 /// Connect briefly, enumerate GATT, return channel pairs present on the device.
 pub async fn discover_channels_on_device(
     adapter: &Adapter,
