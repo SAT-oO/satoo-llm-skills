@@ -4,8 +4,8 @@
 
 use anyhow::{Context, Result};
 use ble_hack_skill::discover::{draft_verify_plan_from_sweep, parse_sweep_md};
-use ble_hack_skill::verify::write_verify_plan;
 use ble_hack_skill::probe_analyze::{analyze_probe, parse_probe_md};
+use ble_hack_skill::verify::write_verify_plan;
 use ble_hack_skill::workdir;
 use std::fs;
 
@@ -34,7 +34,9 @@ fn main() -> Result<()> {
         "Wrote {} ({} checkpoints from {} sweep hits)",
         plan_path.display(),
         plan.checkpoints.len(),
-        rows.iter().filter(|r| r.class == "echo" || r.class == "non-standard").count()
+        rows.iter()
+            .filter(|r| r.class == "echo" || r.class == "non-standard")
+            .count()
     );
     Ok(())
 }

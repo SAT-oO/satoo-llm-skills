@@ -9,9 +9,9 @@ use ble_hack_skill::probe_analyze::{
     synthesize_sweep_from_probe,
 };
 use ble_hack_skill::session::{
-    adapter, classify_response, connect, send_and_wait, send_burst, spaced_hex, ChannelPair,
+    ChannelPair, adapter, classify_response, connect, send_and_wait, send_burst, spaced_hex,
 };
-use btleplug::api::{bleuuid::uuid_from_u16, Peripheral};
+use btleplug::api::{Peripheral, bleuuid::uuid_from_u16};
 use std::fs;
 use std::time::Duration;
 
@@ -117,7 +117,11 @@ async fn run_frame_list_sweep(
             .unwrap_or_else(|| "(silent)".into());
         let class = classify_response(&frame, &response).into();
         if class != "silent" {
-            println!("  {label}: {} -> {} [{class}]", spaced_hex(&frame), resp_str);
+            println!(
+                "  {label}: {} -> {} [{class}]",
+                spaced_hex(&frame),
+                resp_str
+            );
         }
         rows.push(Row {
             label,
@@ -136,7 +140,10 @@ async fn run_frame_list_sweep(
         .take(5)
         .collect();
 
-    println!("\n=== Burst top motor candidates ({}) ===", burst_candidates.len());
+    println!(
+        "\n=== Burst top motor candidates ({}) ===",
+        burst_candidates.len()
+    );
     for c in burst_candidates {
         let bytes: Vec<u8> = c
             .sent

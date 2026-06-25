@@ -22,6 +22,11 @@ pub struct VerifyCheckpoint {
     pub burst_hex: String,
     #[serde(default = "default_burst_secs")]
     pub burst_seconds: u64,
+    /// Optional actuation burst sent before `burst_hex` (e.g. prime suction before stop test).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prime_hex: Option<String>,
+    #[serde(default)]
+    pub prime_seconds: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stop_hex: Option<String>,
     #[serde(default)]

@@ -1,9 +1,9 @@
 pub mod crc;
 pub mod discover;
 pub mod gatt;
-pub mod verify;
-pub mod probe_analyze;
 pub mod manufacturers;
 pub mod pipeline;
+pub mod probe_analyze;
 pub mod session;
+pub mod verify;
 pub mod workdir;

@@ -3,8 +3,10 @@
 //! Run from the project root that vendors `ble-hack-skill/`:
 //!   cargo run -p ble-hack-skill --bin ble_run -- --brand BRAND --product PRODUCT --workdir .
 
-use anyhow::{bail, Context, Result};
-use ble_hack_skill::pipeline::{self, motor_families_in_probe, pick_target, probe_passes_automation_gate};
+use anyhow::{Context, Result, bail};
+use ble_hack_skill::pipeline::{
+    self, motor_families_in_probe, pick_target, probe_passes_automation_gate,
+};
 use ble_hack_skill::workdir as wd;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -52,9 +54,9 @@ async fn main() -> Result<()> {
         )?;
         println!("Wrote {}", scan_path.display());
 
-        let target = pick_target(&devices, true).with_context(|| {
-            "no device with matching local name — power on target, disconnect official app"
-        })?;
+        let target = pick_target(&devices, true).with_context(
+            || "no device with matching local name — power on target, disconnect official app",
+        )?;
 
         println!(
             "Target: {} ({}) tier={} score={}",
@@ -132,7 +134,8 @@ async fn main() -> Result<()> {
     }
 
     println!("\n═══ STEP 5: Human verification (watch the device) ═══\n");
-    let status = run_subcommand_interactive(&workdir, "ble_verify", &["--workdir", workdir_s]).await?;
+    let status =
+        run_subcommand_interactive(&workdir, "ble_verify", &["--workdir", workdir_s]).await?;
 
     if !status.success() {
         bail!("ble_verify exited with {}", status);
@@ -148,14 +151,7 @@ async fn main() -> Result<()> {
         &product,
     ];
     let check_status = Command::new("cargo")
-        .args([
-            "run",
-            "-p",
-            "ble-hack-skill",
-            "--bin",
-            "ble_check",
-            "--",
-        ])
+        .args(["run", "-p", "ble-hack-skill", "--bin", "ble_check", "--"])
         .args(&check_args)
         .current_dir(&workdir)
         .stdout(Stdio::inherit())

@@ -1,7 +1,7 @@
 //! Sweep → verify plan → FINDINGS. All command bytes flow from probe/sweep artifacts.
 
-use crate::verify::{VerifyCheckpoint, VerifyPlan, VerifySummary};
 use crate::probe_analyze::{self, ProbeAnalysis};
+use crate::verify::{VerifyCheckpoint, VerifyPlan, VerifySummary};
 use std::collections::{BTreeMap, BTreeSet};
 
 pub use crate::probe_analyze::{
@@ -58,9 +58,8 @@ pub fn infer_stop_hex(rows: &[SweepRow], analysis: &ProbeAnalysis) -> Option<Str
     rows.iter()
         .find(|r| {
             is_hit(r)
-                && probe_analyze::parse_hex_line(&r.sent).is_some_and(|b| {
-                    b.len() >= 4 && b[1] == 0x08 && b[3] == 0x01
-                })
+                && probe_analyze::parse_hex_line(&r.sent)
+                    .is_some_and(|b| b.len() >= 4 && b[1] == 0x08 && b[3] == 0x01)
         })
         .map(|r| r.sent.clone())
         .or_else(|| {
@@ -158,6 +157,8 @@ pub fn draft_verify_plan_from_sweep(rows: &[SweepRow], analysis: &ProbeAnalysis)
             expect: expect.into(),
             burst_hex: row.sent.clone(),
             burst_seconds: burst_secs,
+            prime_hex: None,
+            prime_seconds: None,
             stop_hex,
             one_shot,
         });
@@ -167,21 +168,26 @@ pub fn draft_verify_plan_from_sweep(rows: &[SweepRow], analysis: &ProbeAnalysis)
         probe_analyze::parse_hex_line(&r.sent)
             .is_some_and(|b| b.get(1) == Some(&0x04) && b.get(5) != Some(&0x00))
     }) {
-        if let Some(row) = hits.iter().find(|r| {
-            probe_analyze::parse_hex_line(&r.sent)
-                .is_some_and(|b| b[1] == 0x04 && b[5] == 0x40)
-        }).or_else(|| {
-            hits.iter().find(|r| {
-                probe_analyze::parse_hex_line(&r.sent)
-                    .is_some_and(|b| b[1] == 0x04 && b[5] != 0x00)
+        if let Some(row) = hits
+            .iter()
+            .find(|r| {
+                probe_analyze::parse_hex_line(&r.sent).is_some_and(|b| b[1] == 0x04 && b[5] == 0x40)
             })
-        }) {
+            .or_else(|| {
+                hits.iter().find(|r| {
+                    probe_analyze::parse_hex_line(&r.sent)
+                        .is_some_and(|b| b[1] == 0x04 && b[5] != 0x00)
+                })
+            })
+        {
             checkpoints.push(VerifyCheckpoint {
                 id: "boost_latch".into(),
                 label: "Boost latch (single frame)".into(),
                 expect: "Single non-zero frame sustains motion without repeat; stop halts.".into(),
                 burst_hex: row.sent.clone(),
                 burst_seconds: 1,
+                prime_hex: None,
+                prime_seconds: None,
                 stop_hex: boost_stop.clone(),
                 one_shot: true,
             });
@@ -195,6 +201,8 @@ pub fn draft_verify_plan_from_sweep(rows: &[SweepRow], analysis: &ProbeAnalysis)
             expect: "All stretch/M motion stops.".into(),
             burst_hex: stop,
             burst_seconds: 1,
+            prime_hex: None,
+            prime_seconds: None,
             stop_hex: None,
             one_shot: true,
         });
@@ -240,7 +248,12 @@ pub fn completeness_report(
         .checkpoints
         .iter()
         .map(|c| {
-            let hex = c.burst_hex.split(" (").next().unwrap_or(&c.burst_hex).to_string();
+            let hex = c
+                .burst_hex
+                .split(" (")
+                .next()
+                .unwrap_or(&c.burst_hex)
+                .to_string();
             (hex, c.id.clone())
         })
         .collect();
@@ -310,17 +323,13 @@ pub fn evaluate_pipeline(
 
     let missing_sweep_in_expansion: Vec<_> = sweep_hits
         .iter()
-        .filter(|r| {
-            r.sent.starts_with("55 ") && !expanded_hex.contains(&r.sent)
-        })
+        .filter(|r| r.sent.starts_with("55 ") && !expanded_hex.contains(&r.sent))
         .map(|r| format!("{} `{}`", r.label, r.sent))
         .collect();
 
     let completeness = verify_md.map(|v| completeness_report(v, sweep_md, &plan));
     let ready_for_findings = missing_sweep_in_expansion.is_empty()
-        && completeness
-            .as_ref()
-            .is_some_and(|c| c.ready_for_findings);
+        && completeness.as_ref().is_some_and(|c| c.ready_for_findings);
 
     PipelineEvaluation {
         header: analysis.header,
@@ -370,7 +379,10 @@ pub fn render_findings_strict(
     if merged.success_ids.contains("stretch_stop") {
         if let Some(row) = merged.success_rows.iter().find(|r| r.id == "stretch_stop") {
             out.push_str("## Stop command\n\n");
-            out.push_str(&format!("```text\n{}\n```\n\n{}\n\n---\n\n", row.sent, row.expect));
+            out.push_str(&format!(
+                "```text\n{}\n```\n\n{}\n\n---\n\n",
+                row.sent, row.expect
+            ));
         }
     }
 
@@ -421,7 +433,9 @@ fn merge_summaries(summaries: &[VerifySummary]) -> VerifySummary {
     merged
 }
 
-fn group_verified_by_opcode(summary: &VerifySummary) -> BTreeMap<u8, Vec<crate::verify::VerifiedRow>> {
+fn group_verified_by_opcode(
+    summary: &VerifySummary,
+) -> BTreeMap<u8, Vec<crate::verify::VerifiedRow>> {
     let mut map: BTreeMap<u8, Vec<crate::verify::VerifiedRow>> = BTreeMap::new();
     for row in &summary.success_rows {
         if row.id == "boost_latch" || row.id == "stretch_stop" {
@@ -462,23 +476,18 @@ fn infer_frame_format_section(summary: &VerifySummary) -> String {
     out
 }
 
-fn render_stretch_sections(
-    out: &mut String,
-    rows: &[crate::verify::VerifiedRow],
-) {
+fn render_stretch_sections(out: &mut String, rows: &[crate::verify::VerifiedRow]) {
     let stretch: Vec<_> = rows
         .iter()
         .filter(|r| {
-            probe_analyze::parse_hex_line(&r.sent)
-                .is_some_and(|b| b.len() >= 4 && b[3] == 0x00)
+            probe_analyze::parse_hex_line(&r.sent).is_some_and(|b| b.len() >= 4 && b[3] == 0x00)
         })
         .cloned()
         .collect();
     let mmodes: Vec<_> = rows
         .iter()
         .filter(|r| {
-            probe_analyze::parse_hex_line(&r.sent)
-                .is_some_and(|b| b.len() >= 4 && b[3] == 0x03)
+            probe_analyze::parse_hex_line(&r.sent).is_some_and(|b| b.len() >= 4 && b[3] == 0x03)
         })
         .cloned()
         .collect();
@@ -488,7 +497,10 @@ fn render_stretch_sections(
         out.push_str("### Command format\n\n```text\n55 08 00 00 <A> <B> <CRC>\n```\n\n");
         out.push_str("### Verified commands\n\n| key | Command | Effect |\n| --- | --- | --- |\n");
         for row in &stretch {
-            out.push_str(&format!("| {} | `{}` | {} |\n", row.id, row.sent, row.expect));
+            out.push_str(&format!(
+                "| {} | `{}` | {} |\n",
+                row.id, row.sent, row.expect
+            ));
         }
         out.push_str("\n---\n\n");
     }
@@ -498,7 +510,10 @@ fn render_stretch_sections(
         out.push_str("### Command format\n\n```text\n55 08 00 03 <mode> <travel> <CRC>\n```\n\n");
         out.push_str("### Verified commands\n\n| key | Command | Effect |\n| --- | --- | --- |\n");
         for row in &mmodes {
-            out.push_str(&format!("| {} | `{}` | {} |\n", row.id, row.sent, row.expect));
+            out.push_str(&format!(
+                "| {} | `{}` | {} |\n",
+                row.id, row.sent, row.expect
+            ));
         }
         out.push_str("\n---\n\n");
     }
@@ -533,11 +548,20 @@ fn render_opcode_section(
     }
     out.push_str("### Verified commands\n\n| key | Command | Effect |\n| --- | --- | --- |\n");
     for row in rows {
-        out.push_str(&format!("| {} | `{}` | {} |\n", row.id, row.sent, row.expect));
+        out.push_str(&format!(
+            "| {} | `{}` | {} |\n",
+            row.id, row.sent, row.expect
+        ));
     }
-    if opcode == 0x04 && rows.iter().any(|r| r.id.starts_with("boost_") && r.id != "boost_stop") {
+    if opcode == 0x04
+        && rows
+            .iter()
+            .any(|r| r.id.starts_with("boost_") && r.id != "boost_stop")
+    {
         out.push_str("\n### Confirmed behavior\n\n");
-        out.push_str("- Single non-zero frame may sustain motion without 50 ms repeat; stop frame halts.\n");
+        out.push_str(
+            "- Single non-zero frame may sustain motion without 50 ms repeat; stop frame halts.\n",
+        );
     }
     out.push_str("\n---\n\n");
 }
@@ -549,7 +573,9 @@ mod tests {
 
     #[test]
     fn project_pipeline_covers_findings_level() {
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap();
         let probe = root.join("test_results.md");
         let sweep = root.join("sweep_results.md");
         let verify = root.join("verify_results.md");
@@ -575,7 +601,9 @@ mod tests {
 
     #[test]
     fn offline_sweep_plan_covers_verify_hex() {
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap();
         let probe = root.join("test_results.md");
         let verify = root.join("verify_results.md");
         if !probe.exists() || !verify.exists() {

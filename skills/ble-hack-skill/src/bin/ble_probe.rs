@@ -10,10 +10,11 @@ use anyhow::{Context, Result};
 use ble_hack_skill::crc::{frame_with_aa, frame_with_crc};
 use ble_hack_skill::gatt;
 use ble_hack_skill::session::{
-    adapter, classify_response, connect, discover_channels_on_device, listen_notifications,
-    read_readable_chars, send_and_wait, send_burst, send_handshake, spaced_hex, ChannelPair, Session,
+    ChannelPair, Session, adapter, classify_response, connect, discover_channels_on_device,
+    listen_notifications, read_readable_chars, send_and_wait, send_burst, send_handshake,
+    spaced_hex,
 };
-use btleplug::api::{bleuuid::uuid_from_u16, Peripheral};
+use btleplug::api::{Peripheral, bleuuid::uuid_from_u16};
 use futures::StreamExt;
 use std::fs;
 use std::time::Duration;
@@ -191,7 +192,9 @@ async fn run_auto(device: &str) -> Result<Vec<ProbeRow>> {
         .max_by_key(|r| score_row(r))
         .or_else(|| {
             rows.iter()
-                .filter(|r| r.class == "non-standard" || r.class == "standard ack" || r.class == "echo")
+                .filter(|r| {
+                    r.class == "non-standard" || r.class == "standard ack" || r.class == "echo"
+                })
                 .max_by_key(|r| score_row(r))
         })
         .map(|r| r.channel.clone());
@@ -210,13 +213,20 @@ async fn run_auto(device: &str) -> Result<Vec<ProbeRow>> {
         });
 
     let channel = target_channel.unwrap_or_else(|| channels[0].clone());
-    println!("\n=== Phase 2–4: single-session motor work on {} ===\n", channel.label);
+    println!(
+        "\n=== Phase 2–4: single-session motor work on {} ===\n",
+        channel.label
+    );
 
     let session = connect(&adpt, device, &channel).await?;
     let mut notifications = session.peripheral.notifications().await?;
 
-    rows.extend(run_opcode_sweep_session(&session, &mut notifications, &channel, 0x55, false).await?);
-    rows.extend(run_opcode_sweep_session(&session, &mut notifications, &channel, 0x55, true).await?);
+    rows.extend(
+        run_opcode_sweep_session(&session, &mut notifications, &channel, 0x55, false).await?,
+    );
+    rows.extend(
+        run_opcode_sweep_session(&session, &mut notifications, &channel, 0x55, true).await?,
+    );
 
     println!("\n=== Phase 4: tail-family probes on hot opcodes ===\n");
     rows.extend(run_tail_family_probe(&session, &mut notifications, &channel).await?);
@@ -321,7 +331,8 @@ async fn run_gatt_preflight(device: &str, channels: &[ChannelPair]) -> Result<Ve
         };
         let mut notifications = session.peripheral.notifications().await?;
 
-        for (_, data) in listen_notifications(&session, &mut notifications, Duration::from_secs(2)).await
+        for (_, data) in
+            listen_notifications(&session, &mut notifications, Duration::from_secs(2)).await
         {
             rows.push(ProbeRow {
                 label: "idle_notify".into(),
@@ -333,12 +344,7 @@ async fn run_gatt_preflight(device: &str, channels: &[ChannelPair]) -> Result<Ve
         }
 
         for (uuid, data) in read_readable_chars(&session).await? {
-            println!(
-                "  {} read {}: {}",
-                channel.label,
-                uuid,
-                spaced_hex(&data)
-            );
+            println!("  {} read {}: {}", channel.label, uuid, spaced_hex(&data));
             rows.push(ProbeRow {
                 label: format!("read_{}", uuid.to_string().split('-').next().unwrap_or("?")),
                 channel: channel.label.clone(),
@@ -388,36 +394,42 @@ async fn run_header_sweep(
     for h in headers {
         // Probe A: [H] 00 00 00 00 00 00
         let a = vec![h, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
-        rows.push(probe_frame(
-            &session,
-            &mut notifications,
-            channel,
-            &format!("probeA_H={h:02X}"),
-            &a,
-        )
-        .await?);
+        rows.push(
+            probe_frame(
+                &session,
+                &mut notifications,
+                channel,
+                &format!("probeA_H={h:02X}"),
+                &a,
+            )
+            .await?,
+        );
 
         // Probe B: [H] 01 00 00 00 00 00
         let b = vec![h, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00];
-        rows.push(probe_frame(
-            &session,
-            &mut notifications,
-            channel,
-            &format!("probeB_H={h:02X}"),
-            &b,
-        )
-        .await?);
+        rows.push(
+            probe_frame(
+                &session,
+                &mut notifications,
+                channel,
+                &format!("probeB_H={h:02X}"),
+                &b,
+            )
+            .await?,
+        );
 
         // Probe C: 03 [H] 00 00
         let c = vec![0x03, h, 0x00, 0x00];
-        rows.push(probe_frame(
-            &session,
-            &mut notifications,
-            channel,
-            &format!("probeC_H={h:02X}"),
-            &c,
-        )
-        .await?);
+        rows.push(
+            probe_frame(
+                &session,
+                &mut notifications,
+                channel,
+                &format!("probeC_H={h:02X}"),
+                &c,
+            )
+            .await?,
+        );
     }
 
     session.peripheral.disconnect().await?;

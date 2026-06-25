@@ -6,10 +6,10 @@
 
 use anyhow::{Context, Result};
 use ble_hack_skill::discover::{
-    analyze_probe, draft_verify_plan_from_sweep, evaluate_pipeline, parse_probe_md,
-    parse_sweep_md, render_findings_strict,
+    analyze_probe, draft_verify_plan_from_sweep, evaluate_pipeline, parse_probe_md, parse_sweep_md,
+    render_findings_strict,
 };
-use ble_hack_skill::verify::{write_verify_plan, VerifySummary};
+use ble_hack_skill::verify::{VerifySummary, write_verify_plan};
 use ble_hack_skill::workdir;
 use std::fs;
 use std::process::ExitCode;
@@ -72,13 +72,19 @@ fn run() -> Result<bool> {
         println!("\nVerified commands: {}", report.verified_commands);
         println!("Ready for FINDINGS: {}", report.ready_for_findings);
         if !report.missing_from_plan.is_empty() {
-            println!("\nSweep hits missing from plan ({}):", report.missing_from_plan.len());
+            println!(
+                "\nSweep hits missing from plan ({}):",
+                report.missing_from_plan.len()
+            );
             for m in report.missing_from_plan.iter().take(10) {
                 println!("  - {m}");
             }
         }
         if !report.missing_from_verify.is_empty() {
-            println!("\nVerified rows not in sweep ({}):", report.missing_from_verify.len());
+            println!(
+                "\nVerified rows not in sweep ({}):",
+                report.missing_from_verify.len()
+            );
             for m in report.missing_from_verify.iter().take(10) {
                 println!("  - {m}");
             }

@@ -9,7 +9,9 @@
 use anyhow::{Context, Result};
 use ble_hack_skill::gatt;
 use ble_hack_skill::manufacturers::{self, OemClass};
-use btleplug::api::{bleuuid::uuid_from_u16, Central, CharPropFlags, Manager, Peripheral, ScanFilter};
+use btleplug::api::{
+    Central, CharPropFlags, Manager, Peripheral, ScanFilter, bleuuid::uuid_from_u16,
+};
 use btleplug::platform::Manager as BluetoothManager;
 use std::collections::HashMap;
 use std::fs;
@@ -130,7 +132,10 @@ async fn main() -> Result<()> {
             .find(|d| d.tier != "SKIP" && d.brand_match)
             .or_else(|| devices.iter().find(|d| d.tier != "SKIP"));
         if let Some(top) = top {
-            println!("\n--- GATT discovery: {} ---", top.local_name.as_deref().unwrap_or("?"));
+            println!(
+                "\n--- GATT discovery: {} ---",
+                top.local_name.as_deref().unwrap_or("?")
+            );
             discover_gatt(&adapter, top).await?;
         } else {
             println!("\nNo non-skipped candidate for GATT discovery.");
@@ -138,7 +143,10 @@ async fn main() -> Result<()> {
     }
 
     if let Some(path) = output {
-        fs::write(&path, format_report_md(&devices, brand.as_deref(), product.as_deref()))?;
+        fs::write(
+            &path,
+            format_report_md(&devices, brand.as_deref(), product.as_deref()),
+        )?;
         println!("\nWrote {path}");
     }
 
@@ -152,7 +160,9 @@ fn arg_value(args: &[String], flag: &str) -> Option<String> {
 }
 
 fn has_uart_services(services: &[Uuid]) -> bool {
-    services.iter().any(|u| *u == UART_SERVICE || *u == UART_RX || *u == UART_TX)
+    services
+        .iter()
+        .any(|u| *u == UART_SERVICE || *u == UART_RX || *u == UART_TX)
 }
 
 fn score_device(
@@ -180,9 +190,7 @@ fn score_device(
         OemClass::Unknown => {
             score += 40;
             if let Some(id) = company_id {
-                notes.push(format!(
-                    "non-major manufacturer 0x{id:04X} — verify on web"
-                ));
+                notes.push(format!("non-major manufacturer 0x{id:04X} — verify on web"));
             }
         }
         OemClass::NoData => {
@@ -238,10 +246,7 @@ fn print_report(devices: &[ScannedDevice], brand: Option<&str>, product: Option<
             .map(|id| format!("0x{id:04X}"))
             .unwrap_or_else(|| "—".into());
         let name = d.local_name.as_deref().unwrap_or("—");
-        let rssi = d
-            .rssi
-            .map(|r| format!("{r}"))
-            .unwrap_or_else(|| "—".into());
+        let rssi = d.rssi.map(|r| format!("{r}")).unwrap_or_else(|| "—".into());
         let notes = d.notes.join("; ");
         println!(
             "{:<6} {:<36} {:<20} {:<10} {:<8} {}",
@@ -296,7 +301,11 @@ fn print_report(devices: &[ScannedDevice], brand: Option<&str>, product: Option<
     }
 }
 
-fn format_report_md(devices: &[ScannedDevice], brand: Option<&str>, product: Option<&str>) -> String {
+fn format_report_md(
+    devices: &[ScannedDevice],
+    brand: Option<&str>,
+    product: Option<&str>,
+) -> String {
     let mut out = String::from("# BLE Scan Results\n\n");
     if let Some(b) = brand {
         out.push_str(&format!("- Brand filter: `{b}`\n"));
@@ -314,10 +323,7 @@ fn format_report_md(devices: &[ScannedDevice], brand: Option<&str>, product: Opt
             .company_id
             .map(|id| format!("`0x{id:04X}`"))
             .unwrap_or_else(|| "—".into());
-        let mfg_name = d
-            .company_id
-            .map(manufacturers::company_name)
-            .unwrap_or("—");
+        let mfg_name = d.company_id.map(manufacturers::company_name).unwrap_or("—");
         let mfg_data = if d.manufacturer_hex.is_empty() {
             "—".to_string()
         } else {
@@ -342,7 +348,11 @@ fn format_report_md(devices: &[ScannedDevice], brand: Option<&str>, product: Opt
             mfg_data,
             mfg_name,
             rssi,
-            if services.is_empty() { "—".into() } else { services },
+            if services.is_empty() {
+                "—".into()
+            } else {
+                services
+            },
             notes
         ));
     }
@@ -350,7 +360,10 @@ fn format_report_md(devices: &[ScannedDevice], brand: Option<&str>, product: Opt
     out
 }
 
-async fn discover_gatt(adapter: &btleplug::platform::Adapter, device: &ScannedDevice) -> Result<()> {
+async fn discover_gatt(
+    adapter: &btleplug::platform::Adapter,
+    device: &ScannedDevice,
+) -> Result<()> {
     let peripheral = adapter
         .peripherals()
         .await?

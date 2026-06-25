@@ -42,12 +42,7 @@ fn main() -> Result<()> {
     }
 
     let sweep_md = fs::read_to_string(workdir.join("sweep_results.md")).ok();
-    let body = discover::render_findings_strict(
-        &brand,
-        &product,
-        &summaries,
-        sweep_md.as_deref(),
-    );
+    let body = discover::render_findings_strict(&brand, &product, &summaries, sweep_md.as_deref());
     fs::write(&output, body).with_context(|| format!("write {}", output.display()))?;
     println!("Wrote {}", output.display());
     Ok(())

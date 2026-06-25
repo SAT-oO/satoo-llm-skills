@@ -3,6 +3,7 @@
 //!   cargo run -p ble-hack-skill --bin ble_verify
 //!   cargo run -p ble-hack-skill --bin ble_verify -- --workdir .
 //!   cargo run -p ble-hack-skill --bin ble_verify -- --plan verify_plan_m_modes.json
+//!   cargo run -p ble-hack-skill --bin ble_verify -- --from suction_lvl4
 //!
 //! Device UUID is read from `ble_session.json` or `scan_results.md` in the workdir
 //! unless `--device` is passed.
@@ -13,12 +14,12 @@
 
 use anyhow::{Context, Result};
 use ble_hack_skill::discover;
-use ble_hack_skill::verify;
 use ble_hack_skill::session::{
-    adapter, connect, send_and_wait, send_burst, send_handshake, spaced_hex, ChannelPair,
+    ChannelPair, adapter, connect, send_and_wait, send_burst, send_handshake, spaced_hex,
 };
+use ble_hack_skill::verify;
 use ble_hack_skill::workdir;
-use btleplug::api::{bleuuid::uuid_from_u16, Peripheral};
+use btleplug::api::{Peripheral, bleuuid::uuid_from_u16};
 use serde::Deserialize;
 use std::fs;
 use std::io::{self, Write};
@@ -42,7 +43,9 @@ const SVAKOM_HANDSHAKE: [&[u8]; 3] = [
 
 const FREDORCH_HANDSHAKE: [&[u8]; 2] = [
     &[0x55, 0x03, 0x99, 0x9C, 0xAA],
-    &[0x55, 0x09, 0x21, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x2A, 0xAA],
+    &[
+        0x55, 0x09, 0x21, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x2A, 0xAA,
+    ],
 ];
 
 const JLAISDK_INIT: [u8; 7] = [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
@@ -77,6 +80,10 @@ struct Checkpoint {
     burst_hex: String,
     #[serde(default = "default_burst_secs")]
     burst_seconds: u64,
+    #[serde(default)]
+    prime_hex: Option<String>,
+    #[serde(default)]
+    prime_seconds: Option<u64>,
     #[serde(default)]
     stop_hex: Option<String>,
     /// Query/read commands: single send, no sustain burst.
@@ -123,6 +130,7 @@ async fn main() -> Result<()> {
     let device = workdir::resolve_device(&workdir, arg_value(&args, "--device").as_deref())?;
     let plan_path = workdir::resolve_plan_path(&workdir, arg_value(&args, "--plan").as_deref());
     let output = workdir::resolve_output_path(&workdir, arg_value(&args, "--output").as_deref());
+    let from_id = arg_value(&args, "--from");
 
     let plan: Plan = serde_json::from_str(
         &fs::read_to_string(&plan_path)
@@ -162,6 +170,18 @@ async fn main() -> Result<()> {
     let _ = sustain;
     let mut results = Vec::new();
     let mut idx = 0usize;
+    if let Some(id) = &from_id {
+        idx = plan
+            .checkpoints
+            .iter()
+            .position(|c| c.id == *id)
+            .with_context(|| format!("checkpoint id not in plan: {id}"))?;
+        println!(
+            "Resuming from checkpoint {id} ({}/{})",
+            idx + 1,
+            plan.checkpoints.len()
+        );
+    }
 
     while idx < plan.checkpoints.len() {
         let cp = &plan.checkpoints[idx];
@@ -189,22 +209,41 @@ async fn main() -> Result<()> {
         }
 
         let frame = parse_hex(&cp.burst_hex)?;
+        let mut sent_label = String::new();
+
+        if let Some(prime) = &cp.prime_hex {
+            let prime_frame = parse_hex(prime)?;
+            let prime_secs = cp.prime_seconds.unwrap_or(4);
+            println!("Prime: `{}` ({}s)", spaced_hex(&prime_frame), prime_secs);
+            send_burst_on_session(
+                &session,
+                &mut notifications,
+                &prime_frame,
+                Duration::from_secs(prime_secs),
+                plan.sustain_ms,
+            )
+            .await?;
+            time::sleep(Duration::from_millis(300)).await;
+            sent_label = format!(
+                "{} ({}s prime) → ",
+                spaced_hex(&prime_frame),
+                prime_secs
+            );
+        }
+
         println!("Send: `{}`", spaced_hex(&frame));
 
-        let cp_channel = cp
-            .channel
-            .as_deref()
-            .or_else(|| {
-                cp.write_uuid.as_deref().and_then(|w| {
-                    if w.to_ascii_lowercase().contains("ae3b") {
-                        Some("ae3b")
-                    } else if w.to_ascii_lowercase().contains("ae01") {
-                        Some("ae01")
-                    } else {
-                        None
-                    }
-                })
-            });
+        let cp_channel = cp.channel.as_deref().or_else(|| {
+            cp.write_uuid.as_deref().and_then(|w| {
+                if w.to_ascii_lowercase().contains("ae3b") {
+                    Some("ae3b")
+                } else if w.to_ascii_lowercase().contains("ae01") {
+                    Some("ae01")
+                } else {
+                    None
+                }
+            })
+        });
         if let Some(ch) = cp_channel {
             let pair = resolve_channel(Some(ch));
             if pair.label != active_channel {
@@ -218,7 +257,7 @@ async fn main() -> Result<()> {
             }
         }
 
-        let sent_label = if cp.one_shot {
+        let burst_label = if cp.one_shot {
             send_on_session(&session, &mut notifications, &frame).await?;
             time::sleep(Duration::from_millis(300)).await;
             spaced_hex(&frame)
@@ -233,6 +272,7 @@ async fn main() -> Result<()> {
             .await?;
             format!("{} ({}s burst)", spaced_hex(&frame), cp.burst_seconds)
         };
+        sent_label.push_str(&burst_label);
 
         if let Some(stop) = &cp.stop_hex {
             time::sleep(Duration::from_millis(plan.sustain_ms)).await;
@@ -290,12 +330,16 @@ async fn main() -> Result<()> {
     print_summary(&results);
     println!("\nWrote {}", output.display());
 
-    let ok = results.iter().filter(|r| r.verdict == Verdict::Success).count();
+    let ok = results
+        .iter()
+        .filter(|r| r.verdict == Verdict::Success)
+        .count();
     if ok > 0 && findings_auto {
         let summary = verify::VerifySummary::from_markdown(&md);
         let sweep_md = fs::read_to_string(workdir.join("sweep_results.md")).ok();
         let findings_path = workdir.join("FINDINGS.md");
-        let body = discover::render_findings_strict(&brand, &product, &[summary], sweep_md.as_deref());
+        let body =
+            discover::render_findings_strict(&brand, &product, &[summary], sweep_md.as_deref());
         fs::write(&findings_path, body)?;
         println!("Wrote {} ({} success rows)", findings_path.display(), ok);
     } else if ok > 0 {
@@ -401,7 +445,10 @@ fn prompt_user() -> Result<PromptChoice> {
 fn format_results(device: &str, plan: &str, rows: &[ResultRow]) -> String {
     let mut out = format!("# Human Verification Results\n\n");
     out.push_str(&format!("- Device: `{device}`\n"));
-    out.push_str(&format!("- Plan: `{}`\n\n", Path::new(plan).file_name().unwrap().to_string_lossy()));
+    out.push_str(&format!(
+        "- Plan: `{}`\n\n",
+        Path::new(plan).file_name().unwrap().to_string_lossy()
+    ));
     out.push_str("| id | label | sent | expect | verdict |\n");
     out.push_str("| --- | --- | --- | --- | --- |\n");
     for r in rows {
@@ -421,9 +468,15 @@ fn format_results(device: &str, plan: &str, rows: &[ResultRow]) -> String {
 }
 
 fn print_summary(rows: &[ResultRow]) {
-    let ok = rows.iter().filter(|r| r.verdict == Verdict::Success).count();
+    let ok = rows
+        .iter()
+        .filter(|r| r.verdict == Verdict::Success)
+        .count();
     let bad = rows.iter().filter(|r| r.verdict == Verdict::Error).count();
-    let skip = rows.iter().filter(|r| r.verdict == Verdict::Skipped).count();
+    let skip = rows
+        .iter()
+        .filter(|r| r.verdict == Verdict::Skipped)
+        .count();
     println!("\n=== Summary ===");
     println!("  success: {ok}");
     println!("  error:   {bad}");

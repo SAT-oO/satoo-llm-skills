@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use btleplug::api::{Central, CharPropFlags, Manager, Peripheral, ScanFilter, WriteType};
 use btleplug::platform::{Adapter, Manager as BluetoothManager, Peripheral as BlePeripheral};
 use futures::StreamExt;
@@ -107,11 +107,7 @@ async fn try_connect_cached(
     }))
 }
 
-pub async fn connect(
-    adapter: &Adapter,
-    device_id: &str,
-    channel: &ChannelPair,
-) -> Result<Session> {
+pub async fn connect(adapter: &Adapter, device_id: &str, channel: &ChannelPair) -> Result<Session> {
     // Fast path: peripheral may still be in the OS cache without an active scan.
     if let Some(session) = try_connect_cached(adapter, device_id, channel).await? {
         return Ok(session);
@@ -370,11 +366,7 @@ pub async fn send_handshake(
     for (i, packet) in frames.iter().enumerate() {
         session
             .peripheral
-            .write(
-                &session.rx_char,
-                packet,
-                write_type(&session.rx_char),
-            )
+            .write(&session.rx_char, packet, write_type(&session.rx_char))
             .await?;
         if i + 1 < frames.len() {
             time::sleep(HANDSHAKE_GAP).await;
@@ -410,15 +402,9 @@ pub async fn send_burst(
         frame_idx += 1;
         session
             .peripheral
-            .write(
-                &session.rx_char,
-                payload,
-                write_type(&session.rx_char),
-            )
+            .write(&session.rx_char, payload, write_type(&session.rx_char))
             .await?;
-        if let Ok(Some(n)) =
-            time::timeout(Duration::from_millis(30), notifications.next()).await
-        {
+        if let Ok(Some(n)) = time::timeout(Duration::from_millis(30), notifications.next()).await {
             if n.uuid == session.tx_char.uuid {
                 last_response = Some(n.value);
             }

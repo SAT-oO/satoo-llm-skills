@@ -29,9 +29,7 @@ pub fn classify(id: Option<u16>) -> OemClass {
 }
 
 /// Known BLE local names for products whose advertisement omits the marketing brand.
-const PRODUCT_BLE_ALIASES: &[(&str, &[&str])] = &[
-    ("kisstoy", &["ply5", "ply", "polly"]),
-];
+const PRODUCT_BLE_ALIASES: &[(&str, &[&str])] = &[("kisstoy", &["ply5", "ply", "polly"])];
 
 /// Returns true when brand or product appears in `local_name` (case-insensitive).
 pub fn name_matches(brand: &str, product: Option<&str>, local_name: Option<&str>) -> bool {

@@ -2,7 +2,7 @@
 
 **Self-contained workflow.** Copy `ble-hack-skill/` anywhere; runtime needs a BLE-capable host with Rust (`btleplug` + `tokio`).
 
-**Deliverable:** `FINDINGS.md` — verified commands only, table-driven.
+**Deliverables:** `STATUS.md` (living session state) and `FINDINGS.md` (verified commands only).
 
 **Package boundary:** `ble-hack-skill/` is product-agnostic. Session artifacts, `FINDINGS.md`, and product-specific code live in the **project root** (`--workdir .`), not inside this folder.
 
@@ -19,7 +19,7 @@ Reverse-engineer proprietary BLE peripheral protocols — any brand, emphasis on
 
 1. **Scan** and rank peripherals (name match, UART GATT, non–major-OEM).
 2. **Research** via Gemini Task before byte sweeps.
-3. **Probe** → **sweep** → **plan** → **human verify** → **FINDINGS.md**.
+3. **Probe** (byte-by-byte) → **opcode human gate** → maintain **`STATUS.md`** → **sweep** → **plan** → **human verify** → **FINDINGS.md**.
 4. Keep this folder generic; product specifics go in the project root.
 
 ---
@@ -28,7 +28,7 @@ Reverse-engineer proprietary BLE peripheral protocols — any brand, emphasis on
 
 | Project root (`--workdir .`) | Not under `ble-hack-skill/` |
 | --- | --- |
-| `scan_results.md`, `test_results.md`, `sweep_results.md`, `verify_plan.json`, `verify_results.md`, `FINDINGS.md` | Product-named tools, hardcoded UUIDs, handshakes, command tables |
+| `STATUS.md`, `scan_results.md`, `test_results.md`, `sweep_results.md`, `verify_plan.json`, `verify_results.md`, `FINDINGS.md` | Product-named tools, hardcoded UUIDs, handshakes, command tables |
 
 **Agent rule:** if a change is tied to one product, implement it in the project root.
 
@@ -39,24 +39,33 @@ Reverse-engineer proprietary BLE peripheral protocols — any brand, emphasis on
 ```mermaid
 flowchart TD
     A[ble_scan] --> B[Gemini research Task]
-    B --> C[ble_probe --auto]
-    C --> D{Automation gate?}
-    D -->|no| A
-    D -->|yes| E[ble_sweep]
-    E -->|offline fallback| F[sweep_results.md]
-    E --> F
-    F --> G[ble_plan]
-    G --> H[ble_verify]
-    H --> I[ble_check]
-    I --> J[FINDINGS.md]
+    B --> C[ble_probe header-sweep]
+    C --> D[Confirm header byte]
+    D --> E[ble_probe opcode-sweep]
+    E --> F{Human: movement per opcode?}
+    F --> S[Update STATUS.md]
+    S --> G[Infer TX length from RX notify]
+    G --> H[Sweep bytes 2..N-1]
+    H --> I{Automation gate?}
+    I -->|no| C
+    I -->|yes| J[ble_sweep]
+    J -->|offline fallback| K[sweep_results.md]
+    J --> K
+    K --> L[ble_plan]
+    L --> M[ble_verify]
+    M --> N[ble_check]
+    N --> O[FINDINGS.md]
 ```
 
 | Phase | Tool | Output | Gate |
 |-------|------|--------|------|
 | 0 Scan | `ble_scan --discover` | `scan_results.md`, `ble_session.json` | `PRIMARY`/`CANDIDATE` + name match |
 | 1 Research | Task `gemini-3.1-pro` | subagent reply | before sweeps |
-| 2 Probe | `ble_probe --auto` | `test_results.md` | FFE1 echo or non-standard |
-| 3 Sweep | `ble_sweep` | `sweep_results.md` | probe-expanded frames; `--offline` if no device |
+| 2a Header | `ble_probe --header-sweep` | `test_results.md` | consistent non-silent on motor channel |
+| 2b Opcode | `ble_probe --opcode-sweep --header H` | `test_results.md` + **`STATUS.md`** | **user y/n per actuating opcode** |
+| 2c Length | compare TX vs RX notify length | notes in `test_results.md` | RX byte count locks TX frame size |
+| 2d Payload | targeted probes / project `sweep_step` | per-byte notes | one byte position at a time |
+| 3 Sweep | `ble_sweep` | `sweep_results.md` | only within confirmed frame families |
 | 4 Plan | `ble_plan` | `verify_plan.json` | ≥1 checkpoint |
 | 5 Verify | `ble_verify` | `verify_results.md` | **y** = physical success |
 | 6 Check | `ble_check` | `FINDINGS.md` | `Ready for FINDINGS: true` |
@@ -69,9 +78,9 @@ cargo run -p ble-hack-skill --bin ble_run -- --brand BRAND --product PRODUCT --w
 
 `ble_run` loops scan → probe until the automation gate passes, then sweep (live or offline) → plan → interactive verify → check.
 
-**Provenance:** `FINDINGS.md` = `verify_results.md` success rows only. Probe/sweep = candidates.
+**Provenance:** `FINDINGS.md` = `verify_results.md` success rows only. `STATUS.md` = human-confirmed / rejected / open during discovery. Probe/sweep = candidates.
 
-**If verify failure rate > 30%**, restart from research and scan.
+**If verify failure rate > 30%**, restart from research and scan. Update `STATUS.md` with rejections before re-probing.
 
 ### Iteration gates
 
@@ -79,7 +88,9 @@ cargo run -p ble-hack-skill --bin ble_run -- --brand BRAND --product PRODUCT --w
 |------|------|---------|
 | Scan | Name match when `--product` set | Rescan; disconnect official app |
 | GATT | FFE1/FFE2 or discovered write/notify pair | Next candidate |
-| Probe | Echo/non-standard on motor channel | Retry; `--handshake` if research suggests init |
+| Probe | Echo/non-standard on motor channel | Retry header/opcode sweep |
+| Opcode | User **y** on movement for each candidate opcode | Do not map motor from notify echo alone |
+| Length | RX notify length stable per opcode family | Re-probe with 6 vs 7 byte TX before payload sweep |
 | Sweep | Hits cover motor families | Re-probe; `--offline` if device absent |
 | Verify | User **y** at checkpoints | Revise plan; re-probe failed families |
 
@@ -88,11 +99,13 @@ cargo run -p ble-hack-skill --bin ble_run -- --brand BRAND --product PRODUCT --w
 ## Anti-patterns
 
 1. Never write `FINDINGS.md` before `ble_verify`.
-2. Never verify from Tx echo alone — confirm **physical movement**.
+2. Never verify from Tx echo or notify mirror alone — confirm **physical movement** (agent chat **y/n** during opcode sweeps).
 3. Never assume one tail byte for all opcodes — test **AA**, **CRC-8 C2**, **00** per family.
-4. Never seed verify hex from reference docs — flow: probe → sweep → plan.
+4. Never seed verify hex from reference docs — flow: header → opcode → length → payload → sweep → plan.
 5. Never pick scan target on RSSI alone — prefer name + UART GATT.
 6. Never add product-specific code inside `ble-hack-skill/`.
+7. Never run wide `ble_sweep` before header, opcode, and frame length are confirmed.
+8. Never assign a motor function to an opcode from `55 8X` notify alone — opcode sweeps need human movement confirmation.
 
 ---
 
@@ -129,14 +142,95 @@ cargo run -p ble-hack-skill --bin ble_check -- --workdir . --brand BRAND --produ
 
 ---
 
+## Byte-by-byte discovery (required before wide sweep)
+
+Discover the frame **one field at a time**. Do not jump to level sweeps or `ble_sweep` until each gate below passes. Take time at each step — quality over speed.
+
+### Order of operations
+
+| Step | Byte(s) | Goal | Tool |
+|------|---------|------|------|
+| 1 | **0 — header** | Find the sync/prefix byte | `ble_probe --header-sweep` |
+| 2 | **1 — opcode** (most likely) | Map which opcodes actuate which motors | `ble_probe --opcode-sweep --header H` + **human y/n** |
+| 3 | **length** | Lock TX frame size | Compare sent TX length vs RX notify length |
+| 4 | **2..N−1 — payload** | Mode, level, CRC/tail | Targeted probes; project `sweep_step` one frame at a time |
+| 5 | **wide sweep** | Expand levels/presets within confirmed families | `ble_sweep` → `ble_plan` → `ble_verify` |
+
+### Step 1 — Confirm header (byte 0)
+
+```bash
+cargo run -p ble-hack-skill --bin ble_probe -- --device UUID --channel ffe1 --header-sweep --output test_results.md
+```
+
+- Candidate headers: `00`, `55`, `AA`, `A5`, `5A`, `FF` (see `ble_probe` probe A/B/C patterns).
+- **Pass:** one header gives consistent non-silent or structured notify on the motor write/notify pair (typically FFE1/FFE2).
+- **Fail:** all silent — retry channel discovery (`ble_scan --discover`) or alternate GATT pair.
+
+Record the winning header in `test_results.md` before continuing.
+
+### Step 2 — Opcode sweep (byte 1) + human movement gate
+
+```bash
+cargo run -p ble-hack-skill --bin ble_probe -- --device UUID --channel ffe1 --opcode-sweep --header 55 --output test_results.md
+```
+
+For each opcode that returns a non-silent RX (echo or `opcode | 0x80` mirror):
+
+1. Send one frame (or short burst) with that opcode.
+2. **Prompt the user in agent chat:** “Opcode `0xNN` — did the device physically actuate? [y/n]”
+3. Record **y** = candidate motor opcode; **n** = notify-only / no movement (do not map a motor).
+
+**Notify mirror is not movement proof.** Example: TX `55 05 …` → RX `55 85 …` only proves the device parsed the frame — not that suction ran.
+
+Only opcodes with human **y** advance to payload discovery and verify plans. Update **`STATUS.md`** after each opcode answer (Confirmed / Rejected / Open).
+
+### Step 3 — Infer frame length from RX notify
+
+Before sweeping bytes 2 onward, lock how many bytes to send:
+
+1. Note **TX length** used in the opcode probe (default 7 bytes in `ble_probe`).
+2. Note **RX notify length** for that opcode (often 6 bytes on SVAKOM-class stacks).
+3. If RX is consistently **shorter** than TX and mirrors `byte1 | 0x80`, test **TX at RX length** (e.g. 6 bytes) vs TX+trailing `00` (7 bytes) — same actuation means use the shorter form.
+4. Record the confirmed length per opcode family in `test_results.md` and **`STATUS.md`**.
+
+Do not assume all opcodes share the same length or tail family — confirm per family.
+
+### Step 4 — Subsequent bytes (payload)
+
+With header, opcode, and length fixed:
+
+- Hold bytes `0..1` and confirmed length constant.
+- Vary one payload byte at a time (mode byte, level, CRC/AA tail).
+- Use short bursts; ask the user **y/n** when a byte change produces a new physical effect.
+- Dead end (silent or echo-only with no movement) — stop that branch.
+
+Project repos may use `sweep_step` / `sweep_checkpoints` for this phase; keep those tools in the project root, not in `ble-hack-skill/`.
+
+### Step 5 — Wide sweep and verify
+
+Only after steps 1–4:
+
+```bash
+cargo run -p ble-hack-skill --bin ble_sweep -- --device UUID --probe test_results.md --output sweep_results.md
+cargo run -p ble-hack-skill --bin ble_plan -- --workdir .
+cargo run -p ble-hack-skill --bin ble_verify -- --workdir .
+```
+
+`ble_probe --auto` remains a fast bootstrap (header + opcode + tail families in one pass). Treat its output as **candidates** — still run the human opcode gate before trusting motor mapping.
+
+---
+
 ## Fallback (scan ambiguous or automation stuck)
+
+If byte-by-byte discovery stalls, use these in order:
 
 1. Connect; subscribe notify before writes; disconnect official app.
 2. Header sweep: `[H] 00 00 00 00 00 00` for H ∈ 00, 55, AA, A5, 5A, FF (`ble_probe --header-sweep`).
-3. If research suggests init, `ble_probe --handshake --auto`.
-4. Try alternate GATT channels (`gatt.rs` discovers write/notify pairs).
-5. Classify responses (table below); recurse one byte at a time.
-6. Dead end = echo-only, silent, or idle loop — stop that path.
+3. Opcode sweep on confirmed header; **human y/n per opcode** before mapping motors.
+4. Lock TX length from RX notify size; test 6 vs 7 byte TX before payload sweeps.
+5. Try alternate GATT channels (`gatt.rs` discovers write/notify pairs).
+6. Classify responses (table below); recurse one byte at a time.
+7. Dead end = echo-only, silent, or idle loop — stop that path.
 
 ### Response classification
 
@@ -147,6 +241,39 @@ cargo run -p ble-hack-skill --bin ble_check -- --workdir . --brand BRAND --produ
 | **silent** | Wrong channel/shape |
 | **status read** | Not motor proof |
 | **physical only** | Run `ble_verify` to capture hex |
+
+---
+
+## STATUS.md
+
+Follow `STATUS.template.md`. Copy to the project root after the first successful scan:
+
+```bash
+cp ble-hack-skill/STATUS.template.md STATUS.md
+```
+
+Then **fetch the product information page** and fill **Product features (requirements)** at the top before probing. That section states which actuators must be mapped — keep the mandated sentence in place (see template).
+
+**Purpose:** single place for **confirmed**, **rejected**, and **open** knowledge while discovery is in progress. Agents and humans read this before resuming work.
+
+| Section | When to update |
+| --- | --- |
+| **Confirmed (human y)** | Header, channel, frame format, opcode → motor mapping after user **y** |
+| **Rejected / corrected** | User **n**, notify-only opcodes, disproved assumptions (e.g. “level 00 = off”) |
+| **Open questions** | Every non-silent opcode not yet human-tested; stop commands; length TBD |
+| **Artifacts** | Pointer to session files in `--workdir` |
+| **Next steps** | Concrete resume actions; set **Sweep paused** when blocking on human gates |
+
+**STATUS.md vs FINDINGS.md**
+
+| | `STATUS.md` | `FINDINGS.md` |
+| --- | --- | --- |
+| Audience | Agents mid-session | End user / integrator |
+| Content | Hypotheses + rejections + gaps | Verified commands only |
+| Source | Human y/n during opcode sweep + verify | `verify_results.md` success rows via `ble_check` |
+| Update | Continuously during discovery | Regenerated when pipeline completes |
+
+Pause wide sweep when opcode mapping is uncertain; note **Sweep paused** at the top of `STATUS.md` with resume conditions (see template). Include the product features fetched from product information page on the top of this file so that requirements are clearly specified (do not delete this sentence). 
 
 ---
 
@@ -184,8 +311,23 @@ Shared libraries: `session.rs` (connect/send/burst), `gatt.rs` (channel discover
 ## Checklist
 
 - [ ] `ble_scan --discover` → UUID + Rx/Tx
+- [ ] Copy `STATUS.template.md` → `STATUS.md` in project root
 - [ ] Gemini research Task
-- [ ] `ble_probe --auto`
-- [ ] `ble_sweep` (or `--offline`)
+- [ ] Header sweep → confirmed header byte → update `STATUS.md`
+- [ ] Opcode sweep → **user y/n** per candidate opcode → update `STATUS.md`
+- [ ] TX frame length locked from RX notify → update `STATUS.md`
+- [ ] Payload bytes probed one position at a time
+- [ ] `ble_sweep` (or `--offline`) within confirmed families only
 - [ ] `ble_plan` → `ble_verify` (user at device) → `ble_check`
 - [ ] Official app disconnected during BLE work
+
+
+--- 
+
+## Final checklist (agents shall not alter this section)
+- Do not include anything product related in this folder. 
+- Take your time with each step above before moving onto the next step. Ensure quality execution with detailed oriented approach. 
+- You, the agent, need to find the UUID of each device you need. You should not expect any manual input of information except for the product features and during human verificaton. 
+- Simple echoing of the BLE command does not signal motor movement. If you want to confirm the motor movement, prompt the user in the agent chat box. 
+- Handshake is not necessary for the BLE commands to work.
+- If you have create a script dedicated for a specific hacking step above, write the conclusion of each step in `STATUS.md` and delete all other files. The next step would only need the content in `STATUS.md` to proceed. 

@@ -93,7 +93,8 @@ pub fn analyze_probe(rows: &[ProbeRow]) -> ProbeAnalysis {
         }
 
         if let Some(b) = parse_hex_line(&row.sent) {
-            if b.len() >= 2 && (row.label.starts_with("opcode_") || row.label.starts_with("tail_")) {
+            if b.len() >= 2 && (row.label.starts_with("opcode_") || row.label.starts_with("tail_"))
+            {
                 *motor_header_votes.entry(b[0]).or_default() += 1;
             }
         }
@@ -278,10 +279,7 @@ pub fn probe_response_index(rows: &[ProbeRow]) -> BTreeMap<String, (String, Stri
         if row.response == "(no response)" || row.response == "(silent)" {
             continue;
         }
-        map.insert(
-            row.sent.clone(),
-            (row.response.clone(), row.class.clone()),
-        );
+        map.insert(row.sent.clone(), (row.response.clone(), row.class.clone()));
     }
     map
 }
@@ -292,7 +290,11 @@ pub fn predict_sweep_class(bytes: &[u8], analysis: &ProbeAnalysis) -> Option<&'s
         return None;
     }
     let op = bytes[1];
-    let tail = analysis.tail_for_opcode.get(&op).copied().unwrap_or(TailKind::Zero);
+    let tail = analysis
+        .tail_for_opcode
+        .get(&op)
+        .copied()
+        .unwrap_or(TailKind::Zero);
     match (op, tail) {
         (0x02 | 0xA0, TailKind::Crc) if analysis.hot_opcodes.contains(&op) => Some("non-standard"),
         (0x04, TailKind::Aa) if analysis.hot_opcodes.contains(&0x04) => Some("echo"),
@@ -351,8 +353,13 @@ pub fn synthesize_sweep_from_probe(
     rows
 }
 
-pub fn format_sweep_md(device: &str, profile: &str, rows: &[(String, String, String, String)]) -> String {
-    let mut out = format!("# BLE Sweep Results\n\n- Device: `{device}`\n- Profile: `{profile}`\n\n");
+pub fn format_sweep_md(
+    device: &str,
+    profile: &str,
+    rows: &[(String, String, String, String)],
+) -> String {
+    let mut out =
+        format!("# BLE Sweep Results\n\n- Device: `{device}`\n- Profile: `{profile}`\n\n");
     out.push_str("| label | sent | response | class |\n");
     out.push_str("| ----- | ---- | -------- | ----- |\n");
     for (label, sent, response, class) in rows {
@@ -428,7 +435,9 @@ mod tests {
 
     #[test]
     fn synthesized_sweep_covers_findings_verify_hex() {
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap();
         let probe_path = root.join("test_results.md");
         let verify_path = root.join("verify_results.md");
         if !probe_path.exists() || !verify_path.exists() {
@@ -462,12 +471,20 @@ mod tests {
             missing.is_empty(),
             "synthesized sweep missing verify hex: {missing:?}"
         );
-        assert!(synth.iter().filter(|(_, _, _, c)| c == "echo" || c == "non-standard").count() >= 40);
+        assert!(
+            synth
+                .iter()
+                .filter(|(_, _, _, c)| c == "echo" || c == "non-standard")
+                .count()
+                >= 40
+        );
     }
 
     #[test]
     fn expansion_covers_verify_hex_from_project_sweep() {
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap();
         let probe_path = root.join("test_results.md");
         let sweep_path = root.join("sweep_results.md");
         if !probe_path.exists() || !sweep_path.exists() {

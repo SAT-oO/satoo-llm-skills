@@ -23,7 +23,9 @@ pub fn crc8_c2(data: &[u8]) -> u8 {
 /// Build a 7-byte frame with CRC-8 C2 tail.
 pub fn frame_with_crc(bytes: [u8; 6]) -> [u8; 7] {
     let crc = crc8_c2(&bytes);
-    [bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], crc]
+    [
+        bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], crc,
+    ]
 }
 
 /// 4-byte frame checksum: sum of first three bytes (Pattern B default).

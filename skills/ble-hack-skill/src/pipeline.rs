@@ -1,7 +1,7 @@
 //! Shared one-go pipeline helpers for scan → probe → verify gating.
 
 use crate::manufacturers;
-use btleplug::api::{bleuuid::uuid_from_u16, Central, Manager, Peripheral, ScanFilter};
+use btleplug::api::{Central, Manager, Peripheral, ScanFilter, bleuuid::uuid_from_u16};
 use btleplug::platform::{Adapter, Manager as BluetoothManager};
 use std::time::Duration;
 use tokio::time;
@@ -57,9 +57,8 @@ pub async fn scan(
             brand,
             product,
         );
-        let brand_match = brand.is_some_and(|b| {
-            manufacturers::name_matches(b, product, props.local_name.as_deref())
-        });
+        let brand_match = brand
+            .is_some_and(|b| manufacturers::name_matches(b, product, props.local_name.as_deref()));
         devices.push(ScannedDevice {
             id: peripheral.id().to_string(),
             local_name: props.local_name.clone(),
@@ -88,10 +87,7 @@ pub fn pick_target<'a>(
     devices: &'a [ScannedDevice],
     require_name_match: bool,
 ) -> Option<&'a ScannedDevice> {
-    let viable: Vec<_> = devices
-        .iter()
-        .filter(|d| d.tier != "SKIP")
-        .collect();
+    let viable: Vec<_> = devices.iter().filter(|d| d.tier != "SKIP").collect();
     if viable.is_empty() {
         return None;
     }
@@ -120,9 +116,8 @@ pub fn probe_passes_automation_gate(probe_md: &str) -> bool {
         let channel = parts[2];
         let sent = parts[3].trim_matches('`');
         let class = parts[5];
-        let is_motor_channel = channel.contains("FFE1")
-            || channel.contains("AE01")
-            || channel.contains("ae01");
+        let is_motor_channel =
+            channel.contains("FFE1") || channel.contains("AE01") || channel.contains("ae01");
         if !is_motor_channel {
             continue;
         }
@@ -147,11 +142,7 @@ pub fn motor_families_in_probe(probe_md: &str) -> bool {
         if !line.starts_with('|') {
             continue;
         }
-        let sent = line
-            .split('`')
-            .nth(1)
-            .unwrap_or("")
-            .to_uppercase();
+        let sent = line.split('`').nth(1).unwrap_or("").to_uppercase();
         if sent.starts_with("55 04") && sent.ends_with("AA") {
             motor_aa = true;
         }

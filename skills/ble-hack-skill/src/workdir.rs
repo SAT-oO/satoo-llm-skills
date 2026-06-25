@@ -1,6 +1,6 @@
 //! Resolve device UUID and artifact paths from a project workdir (no per-run UUID typing).
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -57,9 +57,7 @@ pub fn resolve_device(workdir: &Path, cli_device: Option<&str>) -> Result<String
         }
     }
 
-    bail!(
-        "no device — run ble_scan/ble_run first, or pass --device UUID (writes {SESSION_FILE})"
-    )
+    bail!("no device — run ble_scan/ble_run first, or pass --device UUID (writes {SESSION_FILE})")
 }
 
 pub fn resolve_plan_path(workdir: &Path, cli_plan: Option<&str>) -> PathBuf {
@@ -77,9 +75,8 @@ pub fn resolve_output_path(workdir: &Path, cli_output: Option<&str>) -> PathBuf 
 /// Brand/product for FINDINGS rendering — CLI flags, else session local name, else generic.
 pub fn brand_product_from_args(workdir: &Path, args: &[String]) -> (String, String) {
     let brand = arg_value(args, "--brand").unwrap_or_else(|| "Unknown".into());
-    let product = arg_value(args, "--product").unwrap_or_else(|| {
-        session_local_name(workdir).unwrap_or_else(|| "BLE Device".into())
-    });
+    let product = arg_value(args, "--product")
+        .unwrap_or_else(|| session_local_name(workdir).unwrap_or_else(|| "BLE Device".into()));
     (brand, product)
 }
 

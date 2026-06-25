@@ -1,7 +1,7 @@
 //! Discover write/notify channel pairs from a connected peripheral's GATT table.
 
 use crate::session::ChannelPair;
-use btleplug::api::{bleuuid::uuid_from_u16, CharPropFlags, Characteristic};
+use btleplug::api::{CharPropFlags, Characteristic, bleuuid::uuid_from_u16};
 use uuid::Uuid;
 
 /// Well-known UART and common third-party notify/write channel pairs.
@@ -90,14 +90,8 @@ pub fn discover_channels(characteristics: &[Characteristic]) -> Vec<ChannelPair>
     }
 
     for chars in by_service.values() {
-        let writers: Vec<_> = chars
-            .iter()
-            .filter(|c| can_write(c.properties))
-            .collect();
-        let notifiers: Vec<_> = chars
-            .iter()
-            .filter(|c| can_notify(c.properties))
-            .collect();
+        let writers: Vec<_> = chars.iter().filter(|c| can_write(c.properties)).collect();
+        let notifiers: Vec<_> = chars.iter().filter(|c| can_notify(c.properties)).collect();
         for w in &writers {
             for n in &notifiers {
                 if w.uuid == n.uuid {
