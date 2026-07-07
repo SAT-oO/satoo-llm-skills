@@ -118,7 +118,7 @@ Pair each source with its translations using a consistent suffix:
 | Language | Suffix example |
 |----------|----------------|
 | English (source) | `guide.md` or `adding-ble-protocol.md` |
-| Simplified Chinese | `guide-CN.md` or `Adding-ble-protocol-CN.md` |
+| Simplified Chinese | `guide-CN.md` or `adding-ble-protocol-CN.md` |
 
 Apply the same pattern the project already uses when one exists.
 
