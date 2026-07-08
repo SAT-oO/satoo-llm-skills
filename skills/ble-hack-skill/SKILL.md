@@ -300,7 +300,7 @@ Follow `FINDINGS.template.md`. **Verified commands only** — no scan logs, rese
 Key flags:
 
 - **ble_scan:** `--brand`, `--product`, `--discover`, `--seconds`, `--output`
-- **ble_probe:** `--device`, `--auto`, `--handshake`, `--channel`, `--output`
+- **ble_probe:** `--device`, `--auto`, `--channel`, `--output`, `--burst`
 - **ble_sweep:** `--device`, `--probe`, `--offline`, `--output`
 - **ble_run:** `--workdir`, `--skip-verify`, `--offline-sweep`, `--max-iter`, `--discover`
 
@@ -322,7 +322,21 @@ Shared libraries: `session.rs` (connect/send/burst), `gatt.rs` (channel discover
 - [ ] Official app disconnected during BLE work
 
 
---- 
+---
+
+## Post-completion cleanup (project root)
+
+**Do not run this cleanup unless the user explicitly instructs you to.** During active discovery, keep session artifacts (`scan_results.md`, `test_results.md`, verify plans, capture tooling, product-specific sweep scripts) — they are inputs for the next pipeline step.
+
+When the user **explicitly** asks to clean up after verified `FINDINGS.md`:
+
+1. **Keep:** `FINDINGS.md` (and translations), optionally a trimmed `STATUS.md` (brief process only — how header/opcode/length/payload were discovered).
+2. **Remove:** discovery artifacts (`scan_results.md`, `test_results.md`, `sweep_results.md`, `verify_plan*.json`, `verify_*results*.md`, `ble_session.json`), traffic-capture packages, one-off verify/sweep shell scripts, and any product-specific code inside `ble-hack-skill/`.
+3. **Leave `ble-hack-skill/` generic** — reusable scan/probe/sweep/verify pipeline only; no hardcoded UUIDs, handshakes, or command tables for one product. Use `ble_probe --burst` for ad-hoc replay; no separate product crate required unless the user asks for one.
+
+After each dedicated hacking step, record conclusions in `STATUS.md`; once `FINDINGS.md` is complete and the user requests cleanup, delete step-specific tooling so the next reader needs only `FINDINGS.md`, `STATUS.md`, and `ble_probe --burst` for ad-hoc replay.
+
+---
 
 ## Final checklist (agents shall not alter this section)
 - Do not include anything product related in this folder. 

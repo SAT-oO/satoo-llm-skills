@@ -5,8 +5,6 @@ use std::collections::HashSet;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VerifyPlan {
-    #[serde(default)]
-    pub handshake: bool,
     #[serde(default = "default_sustain_ms")]
     pub sustain_ms: u64,
     #[serde(default = "default_channel")]
@@ -29,6 +27,11 @@ pub struct VerifyCheckpoint {
     pub prime_seconds: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stop_hex: Option<String>,
+    /// Semicolon-separated stop frames (alternated ~2s).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stop_burst_hex: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stop_burst_seconds: Option<u64>,
     #[serde(default)]
     pub one_shot: bool,
 }

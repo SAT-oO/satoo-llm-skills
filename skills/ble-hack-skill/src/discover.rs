@@ -160,6 +160,8 @@ pub fn draft_verify_plan_from_sweep(rows: &[SweepRow], analysis: &ProbeAnalysis)
             prime_hex: None,
             prime_seconds: None,
             stop_hex,
+            stop_burst_hex: None,
+            stop_burst_seconds: None,
             one_shot,
         });
     }
@@ -189,6 +191,8 @@ pub fn draft_verify_plan_from_sweep(rows: &[SweepRow], analysis: &ProbeAnalysis)
                 prime_hex: None,
                 prime_seconds: None,
                 stop_hex: boost_stop.clone(),
+                stop_burst_hex: None,
+                stop_burst_seconds: None,
                 one_shot: true,
             });
         }
@@ -204,12 +208,13 @@ pub fn draft_verify_plan_from_sweep(rows: &[SweepRow], analysis: &ProbeAnalysis)
             prime_hex: None,
             prime_seconds: None,
             stop_hex: None,
+            stop_burst_hex: None,
+            stop_burst_seconds: None,
             one_shot: true,
         });
     }
 
     VerifyPlan {
-        handshake: false,
         sustain_ms: 50,
         channel: "ffe1".into(),
         checkpoints,

@@ -15,11 +15,11 @@
 use anyhow::{Context, Result};
 use ble_hack_skill::discover;
 use ble_hack_skill::session::{
-    ChannelPair, adapter, connect, send_and_wait, send_burst, send_handshake, spaced_hex,
+    ChannelPair, adapter, connect, send_and_wait, send_burst, spaced_hex,
 };
 use ble_hack_skill::verify;
 use ble_hack_skill::workdir;
-use btleplug::api::{Peripheral, bleuuid::uuid_from_u16};
+use btleplug::api::{CharPropFlags, Peripheral, WriteType, bleuuid::uuid_from_u16};
 use serde::Deserialize;
 use std::fs;
 use std::io::{self, Write};
@@ -35,21 +35,6 @@ fn default_channel() -> ChannelPair {
     }
 }
 
-const SVAKOM_HANDSHAKE: [&[u8]; 3] = [
-    &[0x55, 0x04, 0x00, 0x00, 0x01, 0xFF, 0xAA],
-    &[0x55, 0x04, 0x00, 0x00, 0x00, 0x00, 0xAA],
-    &[0x55, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00],
-];
-
-const FREDORCH_HANDSHAKE: [&[u8]; 2] = [
-    &[0x55, 0x03, 0x99, 0x9C, 0xAA],
-    &[
-        0x55, 0x09, 0x21, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x2A, 0xAA,
-    ],
-];
-
-const JLAISDK_INIT: [u8; 7] = [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Verdict {
     Success,
@@ -59,11 +44,6 @@ enum Verdict {
 
 #[derive(Debug, Deserialize)]
 struct Plan {
-    #[serde(default)]
-    handshake: bool,
-    /// `fredorch` | `jlaisdk` — sent before checkpoints when set.
-    #[serde(default)]
-    handshake_type: Option<String>,
     #[serde(default = "default_sustain_ms")]
     sustain_ms: u64,
     #[serde(default)]
@@ -86,6 +66,11 @@ struct Checkpoint {
     prime_seconds: Option<u64>,
     #[serde(default)]
     stop_hex: Option<String>,
+    /// Semicolon-separated frames; alternated for `stop_burst_seconds` (FINDINGS stop sequence).
+    #[serde(default)]
+    stop_burst_hex: Option<String>,
+    #[serde(default)]
+    stop_burst_seconds: Option<u64>,
     /// Query/read commands: single send, no sustain burst.
     #[serde(default)]
     one_shot: bool,
@@ -149,22 +134,6 @@ async fn main() -> Result<()> {
     let mut active_channel = channel.label.clone();
 
     println!("Connected. Human verification — watch the device.\n");
-    if let Some(ht) = plan.handshake_type.as_deref() {
-        match ht {
-            "fredorch" => {
-                send_handshake(&session, &mut notifications, &FREDORCH_HANDSHAKE).await?;
-                println!("Fredorch handshake sent.\n");
-            }
-            "jlaisdk" => {
-                let _ = send_and_wait(&session, &mut notifications, &JLAISDK_INIT).await?;
-                println!("JLAISDK init (00×7) sent.\n");
-            }
-            other => anyhow::bail!("unknown handshake_type: {other}"),
-        }
-    } else if plan.handshake {
-        send_handshake(&session, &mut notifications, &SVAKOM_HANDSHAKE).await?;
-        println!("Svakom handshake sent.\n");
-    }
 
     let sustain = Duration::from_millis(plan.sustain_ms);
     let _ = sustain;
@@ -196,15 +165,45 @@ async fn main() -> Result<()> {
         println!("Expect: {}", cp.expect);
 
         if cp.burst_hex.is_empty() {
-            println!("(no burst_hex — skipping send)");
-            results.push(ResultRow {
-                id: cp.id.clone(),
-                label: cp.label.clone(),
-                sent: String::new(),
-                expect: cp.expect.clone(),
-                verdict: Verdict::Skipped,
-            });
-            idx += 1;
+            println!("(read-only checkpoint — no BLE send)\n");
+            match prompt_user()? {
+                PromptChoice::Success => {
+                    println!("  → marked SUCCESS\n");
+                    results.push(ResultRow {
+                        id: cp.id.clone(),
+                        label: cp.label.clone(),
+                        sent: String::new(),
+                        expect: cp.expect.clone(),
+                        verdict: Verdict::Success,
+                    });
+                    idx += 1;
+                }
+                PromptChoice::Error => {
+                    println!("  → marked ERROR\n");
+                    results.push(ResultRow {
+                        id: cp.id.clone(),
+                        label: cp.label.clone(),
+                        sent: String::new(),
+                        expect: cp.expect.clone(),
+                        verdict: Verdict::Error,
+                    });
+                    idx += 1;
+                }
+                PromptChoice::Replay => {
+                    println!("  → replaying checkpoint\n");
+                }
+                PromptChoice::Quit => {
+                    println!("  → quit early\n");
+                    results.push(ResultRow {
+                        id: cp.id.clone(),
+                        label: cp.label.clone(),
+                        sent: String::new(),
+                        expect: cp.expect.clone(),
+                        verdict: Verdict::Skipped,
+                    });
+                    break;
+                }
+            }
             continue;
         }
 
@@ -218,7 +217,7 @@ async fn main() -> Result<()> {
             send_burst_on_session(
                 &session,
                 &mut notifications,
-                &prime_frame,
+                &[prime_frame.clone()],
                 Duration::from_secs(prime_secs),
                 plan.sustain_ms,
             )
@@ -251,9 +250,6 @@ async fn main() -> Result<()> {
                 session = connect(&adpt, &device, &pair).await?;
                 notifications = session.peripheral.notifications().await?;
                 active_channel = pair.label.clone();
-                if plan.handshake_type.as_deref() == Some("jlaisdk") {
-                    let _ = send_and_wait(&session, &mut notifications, &JLAISDK_INIT).await?;
-                }
             }
         }
 
@@ -265,7 +261,7 @@ async fn main() -> Result<()> {
             send_burst_on_session(
                 &session,
                 &mut notifications,
-                &frame,
+                &[frame.clone()],
                 Duration::from_secs(cp.burst_seconds),
                 plan.sustain_ms,
             )
@@ -274,7 +270,33 @@ async fn main() -> Result<()> {
         };
         sent_label.push_str(&burst_label);
 
-        if let Some(stop) = &cp.stop_hex {
+        if let Some(stop_burst) = &cp.stop_burst_hex {
+            time::sleep(Duration::from_millis(plan.sustain_ms)).await;
+            let frames: Vec<Vec<u8>> = stop_burst
+                .split(';')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(parse_hex)
+                .collect::<Result<_>>()?;
+            let secs = cp.stop_burst_seconds.unwrap_or(2);
+            println!(
+                "Stop burst: {} frame(s), {}s",
+                frames.len(),
+                secs
+            );
+            for f in &frames {
+                println!("  `{}`", spaced_hex(f));
+            }
+            send_app_stop_burst(
+                &session,
+                &mut notifications,
+                &frames,
+                Duration::from_secs(secs),
+                plan.sustain_ms,
+            )
+            .await?;
+            time::sleep(Duration::from_millis(500)).await;
+        } else if let Some(stop) = &cp.stop_hex {
             time::sleep(Duration::from_millis(plan.sustain_ms)).await;
             let stop_frame = parse_hex(stop)?;
             send_on_session(&session, &mut notifications, &stop_frame).await?;
@@ -398,15 +420,54 @@ async fn send_on_session(
     Ok(())
 }
 
+async fn send_app_stop_burst(
+    session: &ble_hack_skill::session::Session,
+    notifications: &mut (impl futures::StreamExt<Item = btleplug::api::ValueNotification> + Unpin),
+    frames: &[Vec<u8>],
+    duration: Duration,
+    sustain_ms: u64,
+) -> Result<()> {
+    let (ffe1, ffe2): (Vec<_>, Vec<_>) = frames
+        .iter()
+        .cloned()
+        .partition(|f| f.len() >= 2 && f[1] == 0xFF);
+    if !ffe1.is_empty() {
+        send_burst_on_session(session, notifications, &ffe1, duration, sustain_ms).await?;
+    }
+    for frame in &ffe2 {
+        let wt = if session
+            .tx_char
+            .properties
+            .contains(CharPropFlags::WRITE_WITHOUT_RESPONSE)
+        {
+            WriteType::WithoutResponse
+        } else {
+            WriteType::WithResponse
+        };
+        println!("  FFE2 stop: `{}`", spaced_hex(frame));
+        match time::timeout(
+            Duration::from_secs(3),
+            session.peripheral.write(&session.tx_char, frame, wt),
+        )
+        .await
+        {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => eprintln!("warning: FFE2 stop write failed: {e}"),
+            Err(_) => eprintln!("warning: FFE2 stop write timed out (continuing)"),
+        }
+    }
+    Ok(())
+}
+
 async fn send_burst_on_session(
     session: &ble_hack_skill::session::Session,
     notifications: &mut (impl futures::StreamExt<Item = btleplug::api::ValueNotification> + Unpin),
-    frame: &[u8],
+    frames: &[Vec<u8>],
     duration: Duration,
     sustain_ms: u64,
 ) -> Result<()> {
     let _ = sustain_ms;
-    send_burst(session, notifications, &[frame.to_vec()], duration).await?;
+    send_burst(session, notifications, frames, duration).await?;
     Ok(())
 }
 

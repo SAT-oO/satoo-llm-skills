@@ -10,7 +10,6 @@ use crate::gatt;
 
 pub const RESPONSE_WAIT: Duration = Duration::from_millis(500);
 pub const INTER_CMD_GAP: Duration = Duration::from_millis(50);
-pub const HANDSHAKE_GAP: Duration = Duration::from_millis(80);
 
 pub struct ChannelPair {
     pub label: String,
@@ -356,29 +355,6 @@ pub async fn read_readable_chars(session: &Session) -> Result<Vec<(Uuid, Vec<u8>
         }
     }
     Ok(out)
-}
-
-pub async fn send_handshake(
-    session: &Session,
-    notifications: &mut (impl StreamExt<Item = btleplug::api::ValueNotification> + Unpin),
-    frames: &[&[u8]],
-) -> Result<()> {
-    for (i, packet) in frames.iter().enumerate() {
-        session
-            .peripheral
-            .write(&session.rx_char, packet, write_type(&session.rx_char))
-            .await?;
-        if i + 1 < frames.len() {
-            time::sleep(HANDSHAKE_GAP).await;
-        }
-    }
-    drain_notifications(
-        notifications,
-        session.tx_char.uuid,
-        Duration::from_millis(300),
-    )
-    .await;
-    Ok(())
 }
 
 pub async fn send_burst(

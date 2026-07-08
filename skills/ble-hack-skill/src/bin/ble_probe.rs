@@ -11,20 +11,13 @@ use ble_hack_skill::crc::{frame_with_aa, frame_with_crc};
 use ble_hack_skill::gatt;
 use ble_hack_skill::session::{
     ChannelPair, Session, adapter, classify_response, connect, discover_channels_on_device,
-    listen_notifications, read_readable_chars, send_and_wait, send_burst, send_handshake,
-    spaced_hex,
+    listen_notifications, read_readable_chars, send_and_wait, send_burst, spaced_hex,
 };
 use btleplug::api::{Peripheral, bleuuid::uuid_from_u16};
 use futures::StreamExt;
 use std::fs;
 use std::time::Duration;
 use uuid::Uuid;
-
-const SVAKOM_HANDSHAKE: [&[u8]; 3] = [
-    &[0x55, 0x04, 0x00, 0x00, 0x01, 0xFF, 0xAA],
-    &[0x55, 0x04, 0x00, 0x00, 0x00, 0x00, 0xAA],
-    &[0x55, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00],
-];
 
 struct ProbeRow {
     label: String,
@@ -43,7 +36,6 @@ async fn main() -> Result<()> {
     let preflight_only = args.iter().any(|a| a == "--preflight");
     let header_sweep = args.iter().any(|a| a == "--header-sweep");
     let opcode_sweep = args.iter().any(|a| a == "--opcode-sweep");
-    let with_handshake = args.iter().any(|a| a == "--handshake");
     let burst_hex = arg_value(&args, "--burst");
     let burst_secs: u64 = arg_value(&args, "--seconds")
         .and_then(|s| s.parse().ok())
@@ -68,9 +60,6 @@ async fn main() -> Result<()> {
         let adpt = adapter().await?;
         let session = connect(&adpt, &device, &channel).await?;
         let mut notifications = session.peripheral.notifications().await?;
-        if with_handshake {
-            send_handshake(&session, &mut notifications, &SVAKOM_HANDSHAKE).await?;
-        }
         let frames = vec![payload.clone()];
         let response = send_burst(
             &session,
@@ -99,12 +88,10 @@ async fn main() -> Result<()> {
         };
         for channel in channels {
             if header_sweep {
-                rows.extend(run_header_sweep(&device, &channel, with_handshake).await?);
+                rows.extend(run_header_sweep(&device, &channel).await?);
             }
             if opcode_sweep {
-                rows.extend(
-                    run_opcode_sweep(&device, &channel, header_byte, with_handshake).await?,
-                );
+                rows.extend(run_opcode_sweep(&device, &channel, header_byte).await?);
             }
         }
     } else {
@@ -177,7 +164,7 @@ async fn run_auto(device: &str) -> Result<Vec<ProbeRow>> {
 
     println!("=== Phase 1: header probes on all channels ===\n");
     for channel in &channels {
-        match run_header_sweep(device, channel, false).await {
+        match run_header_sweep(device, channel).await {
             Ok(mut r) => rows.append(&mut r),
             Err(e) => eprintln!("  {} header sweep failed: {e}", channel.label),
         }
@@ -213,28 +200,20 @@ async fn run_auto(device: &str) -> Result<Vec<ProbeRow>> {
         });
 
     let channel = target_channel.unwrap_or_else(|| channels[0].clone());
-    println!(
-        "\n=== Phase 2–4: single-session motor work on {} ===\n",
-        channel.label
-    );
+    let header = best_header_from_rows(&rows);
+    println!("\n=== Phase 2–4: motor probes on {} (header 0x{:02X}) ===\n", channel.label, header);
 
     let session = connect(&adpt, device, &channel).await?;
     let mut notifications = session.peripheral.notifications().await?;
 
     rows.extend(
-        run_opcode_sweep_session(&session, &mut notifications, &channel, 0x55, false).await?,
-    );
-    rows.extend(
-        run_opcode_sweep_session(&session, &mut notifications, &channel, 0x55, true).await?,
+        run_opcode_sweep_session(&session, &mut notifications, &channel, header).await?,
     );
 
-    println!("\n=== Phase 4: tail-family probes on hot opcodes ===\n");
-    rows.extend(run_tail_family_probe(&session, &mut notifications, &channel).await?);
+    println!("\n=== Phase 4: tail-family probes ===\n");
+    rows.extend(run_tail_family_probe(&session, &mut notifications, &channel, header).await?);
 
     session.peripheral.disconnect().await?;
-
-    println!("\n=== Phase 5: AE01 Fredorch-style pattern sweep ===\n");
-    rows.extend(run_fredorch_sweep(device).await.unwrap_or_default());
 
     Ok(rows)
 }
@@ -243,36 +222,33 @@ async fn run_tail_family_probe(
     session: &Session,
     notifications: &mut (impl StreamExt<Item = btleplug::api::ValueNotification> + Unpin),
     channel: &ChannelPair,
+    header: u8,
 ) -> Result<Vec<ProbeRow>> {
     let mut rows = Vec::new();
-    let samples: [(&str, [u8; 7]); 6] = [
-        (
-            "tail_crc_query_02",
-            frame_with_crc([0x55, 0x02, 0x00, 0x00, 0x00, 0x00]),
-        ),
-        (
-            "tail_crc_query_A0",
-            frame_with_crc([0x55, 0xA0, 0x00, 0x00, 0x00, 0x00]),
-        ),
-        (
-            "tail_aa_boost_40",
-            frame_with_aa([0x55, 0x04, 0x00, 0x00, 0x00, 0x40]),
-        ),
+    let samples: [(&str, [u8; 6]); 6] = [
+        ("tail_crc_query_02", [header, 0x02, 0x00, 0x00, 0x00, 0x00]),
+        ("tail_crc_query_A0", [header, 0xA0, 0x00, 0x00, 0x00, 0x00]),
+        ("tail_aa_boost_40", [header, 0x04, 0x00, 0x00, 0x00, 0x40]),
         (
             "tail_crc_stretch",
-            frame_with_crc([0x55, 0x08, 0x00, 0x00, 0x01, 0x01]),
+            [header, 0x08, 0x00, 0x00, 0x01, 0x01],
         ),
         (
             "tail_crc_mmode",
-            frame_with_crc([0x55, 0x08, 0x00, 0x03, 0x01, 0x05]),
+            [header, 0x08, 0x00, 0x03, 0x01, 0x05],
         ),
         (
             "tail_crc_stop",
-            frame_with_crc([0x55, 0x08, 0x00, 0x01, 0x00, 0x00]),
+            [header, 0x08, 0x00, 0x01, 0x00, 0x00],
         ),
     ];
 
-    for (label, frame) in samples {
+    for (label, body) in samples {
+        let frame = if label.contains("aa") {
+            frame_with_aa(body)
+        } else {
+            frame_with_crc(body)
+        };
         let row = probe_frame(session, notifications, channel, label, &frame).await?;
         if row.class != "silent" {
             println!(
@@ -290,11 +266,7 @@ async fn run_opcode_sweep_session(
     notifications: &mut (impl StreamExt<Item = btleplug::api::ValueNotification> + Unpin),
     channel: &ChannelPair,
     header: u8,
-    handshake: bool,
 ) -> Result<Vec<ProbeRow>> {
-    if handshake {
-        send_handshake(session, notifications, &SVAKOM_HANDSHAKE).await?;
-    }
     let mut rows = Vec::new();
     for opcode in 0x00..=0x20u8 {
         let frame = vec![header, opcode, 0x00, 0x00, 0x01, 0x01, 0x00];
@@ -376,17 +348,22 @@ fn score_row(r: &ProbeRow) -> i32 {
     score
 }
 
-async fn run_header_sweep(
-    device: &str,
-    channel: &ChannelPair,
-    handshake: bool,
-) -> Result<Vec<ProbeRow>> {
+fn best_header_from_rows(rows: &[ProbeRow]) -> u8 {
+    rows.iter()
+        .filter(|r| r.label.starts_with("probeA_H=") && r.class != "silent")
+        .max_by_key(|r| score_row(r))
+        .and_then(|r| {
+            r.label
+                .strip_prefix("probeA_H=")
+                .and_then(|h| u8::from_str_radix(h, 16).ok())
+        })
+        .unwrap_or(0x55)
+}
+
+async fn run_header_sweep(device: &str, channel: &ChannelPair) -> Result<Vec<ProbeRow>> {
     let adpt = adapter().await?;
     let session = connect(&adpt, device, channel).await?;
     let mut notifications = session.peripheral.notifications().await?;
-    if handshake {
-        send_handshake(&session, &mut notifications, &SVAKOM_HANDSHAKE).await?;
-    }
 
     let headers = [0x00, 0x55, 0xAA, 0xA5, 0x5A, 0xFF];
     let mut rows = Vec::new();
@@ -440,14 +417,10 @@ async fn run_opcode_sweep(
     device: &str,
     channel: &ChannelPair,
     header: u8,
-    handshake: bool,
 ) -> Result<Vec<ProbeRow>> {
     let adpt = adapter().await?;
     let session = connect(&adpt, device, channel).await?;
     let mut notifications = session.peripheral.notifications().await?;
-    if handshake {
-        send_handshake(&session, &mut notifications, &SVAKOM_HANDSHAKE).await?;
-    }
 
     let mut rows = Vec::new();
     for opcode in 0x00..=0x20u8 {
@@ -471,60 +444,6 @@ async fn run_opcode_sweep(
 
     session.peripheral.disconnect().await?;
     Ok(rows)
-}
-
-async fn run_fredorch_sweep(device: &str) -> Result<Vec<ProbeRow>> {
-    let channel = ChannelPair {
-        label: "AE01/AE02".into(),
-        rx: uuid_from_u16(0xAE01),
-        tx: uuid_from_u16(0xAE02),
-    };
-    let adpt = adapter().await?;
-    let session = connect(&adpt, device, &channel).await?;
-    let mut notifications = session.peripheral.notifications().await?;
-    let mut rows = Vec::new();
-
-    // Fredorch login start
-    let login = vec![0x55, 0x03, 0x99, 0x9C, 0xAA];
-    rows.push(
-        probe_frame(
-            &session,
-            &mut notifications,
-            &channel,
-            "fredorch_login",
-            &login,
-        )
-        .await?,
-    );
-
-    // Pattern commands 0x00-0x13
-    for pat in 0x00..=0x05u8 {
-        let inner = vec![0x16, pat];
-        let frame = fredorch_frame(&inner);
-        rows.push(
-            probe_frame(
-                &session,
-                &mut notifications,
-                &channel,
-                &format!("fredorch_pat_{pat:02X}"),
-                &frame,
-            )
-            .await?,
-        );
-    }
-
-    session.peripheral.disconnect().await?;
-    Ok(rows)
-}
-
-fn fredorch_frame(data: &[u8]) -> Vec<u8> {
-    let len = data.len() as u8 + 2;
-    let mut frame = vec![0x55, len];
-    frame.extend_from_slice(data);
-    let sum: u16 = frame[1..].iter().map(|&b| b as u16).sum();
-    frame.push((sum & 0xFF) as u8);
-    frame.push(0xAA);
-    frame
 }
 
 async fn probe_frame(
