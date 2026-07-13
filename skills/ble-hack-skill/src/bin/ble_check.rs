@@ -7,7 +7,7 @@
 use anyhow::{Context, Result};
 use ble_hack_skill::discover::{
     analyze_probe, draft_verify_plan_from_sweep, evaluate_pipeline, parse_probe_md, parse_sweep_md,
-    render_findings_strict,
+    render_findings_for_workdir,
 };
 use ble_hack_skill::verify::{VerifySummary, write_verify_plan};
 use ble_hack_skill::workdir;
@@ -91,7 +91,13 @@ fn run() -> Result<bool> {
         }
 
         let summary = VerifySummary::from_markdown(verify_md.as_ref().unwrap());
-        let findings = render_findings_strict(&brand, &product, &[summary], Some(&sweep_md));
+        let findings = render_findings_for_workdir(
+            &brand,
+            &product,
+            &[summary],
+            Some(&sweep_md),
+            &workdir,
+        );
         let out = workdir.join("FINDINGS.md");
         fs::write(&out, findings)?;
         println!("\nWrote {} from verify-only renderer", out.display());

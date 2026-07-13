@@ -40,6 +40,7 @@ pub struct VerifyCheckpoint {
 pub struct VerifySummary {
     pub success_ids: HashSet<String>,
     pub success_rows: Vec<VerifiedRow>,
+    pub error_rows: Vec<VerifiedRow>,
 }
 
 #[derive(Debug, Clone)]
@@ -65,6 +66,7 @@ impl VerifySummary {
     pub fn from_markdown(md: &str) -> Self {
         let mut success_ids = HashSet::new();
         let mut success_rows = Vec::new();
+        let mut error_rows = Vec::new();
         for line in md.lines() {
             if !line.starts_with('|') || line.contains("verdict") || line.contains("---") {
                 continue;
@@ -73,13 +75,18 @@ impl VerifySummary {
             if parts.len() < 6 {
                 continue;
             }
+            let row = VerifiedRow {
+                id: parts[1].to_string(),
+                sent: parts[3].trim_matches('`').to_string(),
+                expect: parts[4].to_string(),
+            };
             if parts[5].contains("success") {
                 success_ids.insert(parts[1].to_string());
-                let sent = parts[3].trim_matches('`').to_string();
-                let sent_hex = sent.split(" (").next().unwrap_or(&sent).to_string();
-                success_rows.push(VerifiedRow {
+                success_rows.push(row);
+            } else if parts[5].contains("error") {
+                error_rows.push(VerifiedRow {
                     id: parts[1].to_string(),
-                    sent: sent_hex,
+                    sent: parts[3].trim_matches('`').to_string(),
                     expect: parts[4].to_string(),
                 });
             }
@@ -87,6 +94,7 @@ impl VerifySummary {
         Self {
             success_ids,
             success_rows,
+            error_rows,
         }
     }
 }

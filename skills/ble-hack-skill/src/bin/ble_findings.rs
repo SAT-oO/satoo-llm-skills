@@ -1,6 +1,4 @@
-//! Render FINDINGS.md from verify_results.md success rows only.
-//!
-//!   cargo run -p ble-hack-skill --bin ble_findings -- --workdir . --brand BRAND --product PRODUCT
+//! Render FINDINGS.md from verify_results*.md success rows.
 
 use anyhow::{Context, Result};
 use ble_hack_skill::discover;
@@ -19,30 +17,35 @@ fn main() -> Result<()> {
 
     let mut summaries = Vec::new();
     let mut found = false;
-    for name in [
-        workdir::DEFAULT_VERIFY_OUTPUT,
-        workdir::EXTENDED_VERIFY_OUTPUT,
-    ] {
-        let path = workdir.join(name);
-        if path.exists() {
-            let md = fs::read_to_string(&path)?;
-            if md.contains("**success**") {
-                found = true;
-            }
-            summaries.push(VerifySummary::from_markdown(&md));
-            println!("Loaded {}", path.display());
+    for entry in fs::read_dir(&workdir)? {
+        let entry = entry?;
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        if !name.starts_with("verify_results") || !name.ends_with(".md") {
+            continue;
         }
+        let md = fs::read_to_string(&path)?;
+        if md.contains("**success**") {
+            found = true;
+        }
+        summaries.push(VerifySummary::from_markdown(&md));
+        println!("Loaded {}", path.display());
     }
 
     if !found {
-        anyhow::bail!(
-            "no success rows in verify_results — run ble_verify first ({})",
-            workdir.join(workdir::DEFAULT_VERIFY_OUTPUT).display()
-        );
+        anyhow::bail!("no success rows in verify_results*.md — run ble_verify first");
     }
 
     let sweep_md = fs::read_to_string(workdir.join("sweep_results.md")).ok();
-    let body = discover::render_findings_strict(&brand, &product, &summaries, sweep_md.as_deref());
+    let body = discover::render_findings_for_workdir(
+        &brand,
+        &product,
+        &summaries,
+        sweep_md.as_deref(),
+        &workdir,
+    );
     fs::write(&output, body).with_context(|| format!("write {}", output.display()))?;
     println!("Wrote {}", output.display());
     Ok(())

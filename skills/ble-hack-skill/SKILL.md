@@ -279,9 +279,9 @@ Pause wide sweep when opcode mapping is uncertain; note **Sweep paused** at the 
 
 ## FINDINGS.md
 
-Follow `FINDINGS.template.md`. **Verified commands only** — no scan logs, research, or probe grids.
+Follow `FINDINGS.template.md`. **Minimal byte-oriented output:** one-line speed range, motor byte table, optional orgasm sequence, cautions. No scan logs or probe grids.
 
-`ble_check` regenerates `FINDINGS.md` from verify success rows. Tail families (AA / CRC-8 C2 / `00`) are tested separately; use `src/crc.rs` for CRC-8 C2.
+`ble_findings` / `ble_check` regenerate from `verify_results*.md` success rows (+ error rows → cautions). Channel label from `verify_plan.json` `channel` field.
 
 ---
 

@@ -360,8 +360,13 @@ async fn main() -> Result<()> {
         let summary = verify::VerifySummary::from_markdown(&md);
         let sweep_md = fs::read_to_string(workdir.join("sweep_results.md")).ok();
         let findings_path = workdir.join("FINDINGS.md");
-        let body =
-            discover::render_findings_strict(&brand, &product, &[summary], sweep_md.as_deref());
+        let body = discover::render_findings_for_workdir(
+            &brand,
+            &product,
+            &[summary],
+            sweep_md.as_deref(),
+            &workdir,
+        );
         fs::write(&findings_path, body)?;
         println!("Wrote {} ({} success rows)", findings_path.display(), ok);
     } else if ok > 0 {

@@ -348,227 +348,360 @@ pub fn evaluate_pipeline(
     }
 }
 
+fn merge_summaries(summaries: &[VerifySummary]) -> VerifySummary {
+    let mut merged = VerifySummary::default();
+    for s in summaries {
+        merged.success_ids.extend(s.success_ids.iter().cloned());
+        merged.success_rows.extend(s.success_rows.iter().cloned());
+        merged.error_rows.extend(s.error_rows.iter().cloned());
+    }
+    merged
+}
+
+/// Minimal byte-oriented FINDINGS (see `FINDINGS.template.md`).
 pub fn render_findings_strict(
     brand: &str,
     product: &str,
     summaries: &[VerifySummary],
-    sweep_md: Option<&str>,
+    _sweep_md: Option<&str>,
+    write_target: Option<&str>,
 ) -> String {
     let merged = merge_summaries(summaries);
     if merged.success_rows.is_empty() {
         return String::from("# FINDINGS\n\nNo verified commands — run `ble_verify` first.\n");
     }
 
-    let mut out = format!("# {brand} {product} — Verified BLE Commands\n\n");
-    out.push_str(
-        "Commands listed only from `verify_results.md` **success** rows. Candidates came from `ble_sweep` echo/non-standard hits; hex was human-confirmed with `ble_verify`.\n\n",
-    );
+    let write_line = write_target
+        .map(str::to_string)
+        .unwrap_or_else(|| "Write characteristic (see scan_results.md)".into());
 
-    out.push_str("## Device Info\n\n| Item | Value |\n| --- | --- |\n");
-    out.push_str(&format!("| Brand | {brand} |\n| Product | {product} |\n\n"));
+    let mut out = format!("# {brand} {product} — BLE Commands\n\n");
+    out.push_str(&format!("Write to **{write_line}**. "));
 
-    out.push_str("## Frame Format\n\n");
-    out.push_str(&infer_frame_format_section(&merged));
-    out.push_str("\n---\n\n");
-
-    let groups = group_verified_by_opcode(&merged);
-
-    for (opcode, rows) in &groups {
-        if *opcode == 0x08 {
-            render_stretch_sections(&mut out, rows);
-            continue;
-        }
-        render_opcode_section(&mut out, *opcode, rows, sweep_md);
+    let families = group_frame_families(&merged.success_rows);
+    if families.iter().any(|f| !f.speed_byte_indices.is_empty()) {
+        out.push_str("Each speed byte is `0x00` (off) through `0xFF` (max).\n\n");
+    } else {
+        out.push('\n');
     }
 
-    if merged.success_ids.contains("stretch_stop") {
-        if let Some(row) = merged.success_rows.iter().find(|r| r.id == "stretch_stop") {
-            out.push_str("## Stop command\n\n");
-            out.push_str(&format!(
-                "```text\n{}\n```\n\n{}\n\n---\n\n",
-                row.sent, row.expect
-            ));
-        }
+    for family in &families {
+        render_frame_family(&mut out, family);
     }
 
-    if merged.success_ids.contains("boost_latch") {
-        if let Some(row) = merged.success_rows.iter().find(|r| r.id == "boost_latch") {
-            out.push_str("## Boost latch behavior\n\n");
-            out.push_str(&format!("- {}\n\n---\n\n", row.expect));
-        }
-    }
-
-    out.push_str("## Implementation Notes\n\n");
-    out.push_str("| Use case | Format |\n| --- | --- |\n");
-    for (use_case, example) in infer_use_cases(&merged) {
-        out.push_str(&format!("| {use_case} | `{example}` |\n"));
-    }
+    render_orgasm_section(&mut out, &merged);
+    render_cautions(&mut out, &merged, write_target);
 
     out
 }
 
-fn infer_use_cases(summary: &VerifySummary) -> Vec<(String, String)> {
-    let mut cases = Vec::new();
-    for row in &summary.success_rows {
-        if let Some(b) = probe_analyze::parse_hex_line(&row.sent) {
-            if b.len() < 7 {
-                continue;
-            }
-            let case = match (b[1], b.get(3)) {
-                (0x04, _) => "Video sync",
-                (0x08, Some(0x00)) => "Direct stretch",
-                (0x08, Some(0x03)) => "M-mode presets",
-                (0x08, Some(0x01)) => "Stop",
-                _ => continue,
-            };
-            if !cases.iter().any(|(c, _)| c == case) {
-                cases.push((case.into(), row.sent.clone()));
-            }
+fn primary_hex_from_sent(sent: &str) -> Option<Vec<u8>> {
+    for token in sent.split(['→', ';']) {
+        let t = token.split('(').next().unwrap_or(token).trim();
+        if let Some(b) = probe_analyze::parse_hex_line(t) {
+            return Some(b);
         }
     }
-    cases
+    probe_analyze::parse_hex_line(sent)
 }
 
-fn merge_summaries(summaries: &[VerifySummary]) -> VerifySummary {
-    let mut merged = VerifySummary::default();
-    for s in summaries {
-        merged.success_ids.extend(s.success_ids.iter().cloned());
-        merged.success_rows.extend(s.success_rows.iter().cloned());
+fn hex_label_from_sent(sent: &str) -> String {
+    for token in sent.split(['→', ';']) {
+        let t = token.split('(').next().unwrap_or(token).trim();
+        if probe_analyze::parse_hex_line(t).is_some() {
+            return t.to_string();
+        }
     }
-    merged
+    sent.split('(').next().unwrap_or(sent).trim().to_string()
 }
 
-fn group_verified_by_opcode(
-    summary: &VerifySummary,
-) -> BTreeMap<u8, Vec<crate::verify::VerifiedRow>> {
-    let mut map: BTreeMap<u8, Vec<crate::verify::VerifiedRow>> = BTreeMap::new();
-    for row in &summary.success_rows {
-        if row.id == "boost_latch" || row.id == "stretch_stop" {
+struct FrameFamily {
+    prefix_label: String,
+    length: usize,
+    speed_byte_indices: Vec<usize>,
+    byte_labels: Vec<String>,
+    example: String,
+}
+
+fn group_frame_families(rows: &[crate::verify::VerifiedRow]) -> Vec<FrameFamily> {
+    let mut map: BTreeMap<String, Vec<&crate::verify::VerifiedRow>> = BTreeMap::new();
+    for row in rows {
+        if row.id.contains("orgasm") {
             continue;
         }
-        if let Some(op) = probe_analyze::parse_hex_line(&row.sent).and_then(|b| b.get(1).copied()) {
-            map.entry(op).or_default().push(row.clone());
-        }
+        let Some(bytes) = primary_hex_from_sent(&row.sent) else {
+            continue;
+        };
+        let key = if bytes.len() >= 2 {
+            format!("{}:{}:{}", bytes.len(), bytes[0], bytes[1])
+        } else {
+            format!("{}:{}", bytes.len(), bytes.first().copied().unwrap_or(0))
+        };
+        map.entry(key).or_default().push(row);
     }
-    map
+
+    let mut families = Vec::new();
+    for (_key, group) in map {
+        let Some(first_bytes) = primary_hex_from_sent(&group[0].sent) else {
+            continue;
+        };
+        let speed_indices = infer_speed_byte_indices(&group);
+        let labels = infer_byte_labels(&group, first_bytes.len(), &speed_indices);
+        let prefix = if first_bytes.len() >= 2 {
+            format!("{:02X} {:02X}", first_bytes[0], first_bytes[1])
+        } else {
+            format!("{:02X}", first_bytes[0])
+        };
+        families.push(FrameFamily {
+            prefix_label: prefix,
+            length: first_bytes.len(),
+            speed_byte_indices: speed_indices,
+            byte_labels: labels,
+            example: pick_example_hex(&group),
+        });
+    }
+    families.sort_by_key(|f| f.length);
+    families
 }
 
-fn infer_frame_format_section(summary: &VerifySummary) -> String {
-    let mut out = String::from("```text\n55 <cmd> <p0> <p1> <p2> <p3> <tail>\n```\n\n");
-    out.push_str("| Opcode | Tail (from sweep) | Verified count |\n| --- | --- | --- |\n");
-    let mut opcodes: BTreeMap<u8, (String, usize)> = BTreeMap::new();
-    for row in &summary.success_rows {
-        if let Some(b) = probe_analyze::parse_hex_line(&row.sent) {
-            if b.len() < 7 {
-                continue;
-            }
-            let tail = match b[6] {
-                0xAA => "fixed AA",
-                0x00 => "zero",
-                t if t == crate::crc::crc8_c2(&b[..6]) => "CRC-8 C2",
-                other => {
-                    let _ = other;
-                    "other"
-                }
-            };
-            let entry = opcodes.entry(b[1]).or_insert((tail.to_string(), 0));
-            entry.1 += 1;
-        }
-    }
-    for (op, (tail, n)) in opcodes {
-        out.push_str(&format!("| `0x{op:02X}` | {tail} | {n} |\n"));
-    }
-    out
-}
-
-fn render_stretch_sections(out: &mut String, rows: &[crate::verify::VerifiedRow]) {
-    let stretch: Vec<_> = rows
+fn infer_speed_byte_indices(group: &[&crate::verify::VerifiedRow]) -> Vec<usize> {
+    let parsed: Vec<Vec<u8>> = group
         .iter()
-        .filter(|r| {
-            probe_analyze::parse_hex_line(&r.sent).is_some_and(|b| b.len() >= 4 && b[3] == 0x00)
-        })
-        .cloned()
+        .filter_map(|r| primary_hex_from_sent(&r.sent))
         .collect();
-    let mmodes: Vec<_> = rows
-        .iter()
-        .filter(|r| {
-            probe_analyze::parse_hex_line(&r.sent).is_some_and(|b| b.len() >= 4 && b[3] == 0x03)
-        })
-        .cloned()
-        .collect();
-
-    if !stretch.is_empty() {
-        out.push_str("## Direct stretch (stroke position)\n\n");
-        out.push_str("### Command format\n\n```text\n55 08 00 00 <A> <B> <CRC>\n```\n\n");
-        out.push_str("### Verified commands\n\n| key | Command | Effect |\n| --- | --- | --- |\n");
-        for row in &stretch {
-            out.push_str(&format!(
-                "| {} | `{}` | {} |\n",
-                row.id, row.sent, row.expect
-            ));
-        }
-        out.push_str("\n---\n\n");
+    if parsed.is_empty() {
+        return Vec::new();
     }
-
-    if !mmodes.is_empty() {
-        out.push_str("## M-mode presets\n\n");
-        out.push_str("### Command format\n\n```text\n55 08 00 03 <mode> <travel> <CRC>\n```\n\n");
-        out.push_str("### Verified commands\n\n| key | Command | Effect |\n| --- | --- | --- |\n");
-        for row in &mmodes {
-            out.push_str(&format!(
-                "| {} | `{}` | {} |\n",
-                row.id, row.sent, row.expect
-            ));
+    let len = parsed[0].len();
+    let mut varying = Vec::new();
+    for i in 2..len {
+        let values: BTreeSet<u8> = parsed.iter().filter_map(|b| b.get(i).copied()).collect();
+        if values.len() > 1 {
+            varying.push(i);
         }
-        out.push_str("\n---\n\n");
     }
+    varying
 }
 
-fn render_opcode_section(
-    out: &mut String,
-    opcode: u8,
-    rows: &[crate::verify::VerifiedRow],
-    sweep_md: Option<&str>,
-) {
-    let title = match opcode {
-        0x02 => "Battery query",
-        0xA0 => "Status sync / query",
-        0x04 => "Boost (video-sync thrust)",
-        _ => "Command family",
-    };
-    out.push_str(&format!("## {title}\n\n"));
-    if opcode == 0x02 || opcode == 0xA0 {
-        out.push_str(&format!("### Query\n\n```text\n{}\n```\n\n", rows[0].sent));
-        if let Some(md) = sweep_md {
-            if let Some(resp) = sweep_response_for_query(md, &rows[0].sent) {
-                out.push_str("### Response (sweep capture)\n\n");
-                out.push_str(&format!("```text\n{resp}\n```\n\n"));
+fn infer_byte_labels(
+    group: &[&crate::verify::VerifiedRow],
+    len: usize,
+    speed_indices: &[usize],
+) -> Vec<String> {
+    let mut labels = vec!["—".into(); len];
+    for row in group {
+        let id = row.id.to_ascii_lowercase();
+        let Some(bytes) = primary_hex_from_sent(&row.sent) else {
+            continue;
+        };
+        if id.contains("extension") && bytes.len() > 2 {
+            labels[2] = "Extension speed".into();
+        }
+        if id.contains("vib1") && bytes.len() > 3 {
+            labels[3] = "Vibration 1 speed".into();
+        }
+        if id.contains("vib2") && bytes.len() > 4 {
+            labels[4] = "Vibration 2 speed".into();
+        }
+    }
+    for (idx, label) in labels.iter_mut().enumerate() {
+        if *label == "—" {
+            if speed_indices.contains(&idx) {
+                *label = format!("Byte {idx} speed");
+            } else if idx == 0 {
+                *label = "Header (fixed)".into();
+            } else if idx == 1 {
+                *label = "Opcode (fixed)".into();
+            } else {
+                *label = format!("Byte {idx}");
             }
         }
-        out.push_str(&format!("{}\n\n---\n\n", rows[0].expect));
+    }
+    labels
+}
+
+fn pick_example_hex(group: &[&crate::verify::VerifiedRow]) -> String {
+    if let Some(row) = group
+        .iter()
+        .find(|r| r.id.contains("vib1") && !r.id.contains("vib2"))
+    {
+        return hex_label_from_sent(&row.sent);
+    }
+    group
+        .first()
+        .map(|r| hex_label_from_sent(&r.sent))
+        .unwrap_or_else(|| "—".into())
+}
+
+fn render_frame_family(out: &mut String, family: &FrameFamily) {
+    out.push_str(&format!(
+        "**Motor frame ({} bytes):**\n\n",
+        family.length
+    ));
+    out.push_str("| Byte | Value | Meaning |\n| --- | --- | --- |\n");
+    let prefix_parts: Vec<&str> = family.prefix_label.split_whitespace().collect();
+    for i in 0..family.length {
+        let value = if family.speed_byte_indices.contains(&i) {
+            "`00`–`FF`".to_string()
+        } else if i < prefix_parts.len() {
+            format!("`{}`", prefix_parts[i])
+        } else {
+            "`00`–`FF`".to_string()
+        };
+        let meaning = family
+            .byte_labels
+            .get(i)
+            .cloned()
+            .unwrap_or_else(|| format!("Byte {i}"));
+        out.push_str(&format!("| {i} | {value} | {meaning} |\n"));
+    }
+    if !family.example.is_empty() && family.example != "—" {
+        out.push_str(&format!("\nExample: `{}`.\n\n", family.example));
+    } else {
+        out.push('\n');
+    }
+}
+
+fn render_orgasm_section(out: &mut String, merged: &VerifySummary) {
+    let orgasm_rows: Vec<_> = merged
+        .success_rows
+        .iter()
+        .filter(|r| r.id.contains("orgasm"))
+        .collect();
+    if orgasm_rows.is_empty() {
         return;
     }
-    if opcode == 0x04 {
-        out.push_str("### Command format\n\n```text\n55 04 00 00 00 <scale> AA\n```\n\n");
+
+    let arm = merged.success_rows.iter().find(|r| {
+        r.sent.contains("01")
+            || r.id.contains("orgasm_arm")
+            || r.id.contains("report14_on")
+    });
+    let sustain = orgasm_rows.iter().find(|r| {
+        r.sent.contains("A0 03")
+            || r.id.contains("sustain")
+            || r.id.contains("report14_on")
+    });
+    let stop = orgasm_rows
+        .iter()
+        .find(|r| r.id.contains("stop") && r.sent.starts_with("A0 06"));
+
+    if arm.is_none() && sustain.is_none() && stop.is_none() {
+        return;
     }
-    out.push_str("### Verified commands\n\n| key | Command | Effect |\n| --- | --- | --- |\n");
-    for row in rows {
-        out.push_str(&format!(
-            "| {} | `{}` | {} |\n",
-            row.id, row.sent, row.expect
-        ));
+
+    out.push_str("**Orgasm (3 steps):**\n\n");
+    out.push_str("| Step | Bytes | Meaning |\n| --- | --- | --- |\n");
+    if let Some(a) = arm {
+        if a.sent.contains("01") {
+            out.push_str("| Arm | `01` | 1-byte prime before sustain |\n");
+        }
     }
-    if opcode == 0x04
-        && rows
-            .iter()
-            .any(|r| r.id.starts_with("boost_") && r.id != "boost_stop")
-    {
-        out.push_str("\n### Confirmed behavior\n\n");
-        out.push_str(
-            "- Single non-zero frame may sustain motion without 50 ms repeat; stop frame halts.\n",
+    if let Some(s) = sustain {
+        let hx = hex_label_from_sent(&s.sent);
+        if hx.starts_with("A0 03") {
+            out.push_str(&format!(
+                "| Sustain | `{hx}` | Same motor frame, all max — repeat ~10 Hz |\n",
+            ));
+        }
+    }
+    if let Some(s) = stop {
+        let hx = hex_label_from_sent(&s.sent);
+        out.push_str(&format!("| Stop | `{hx}` | End orgasm mode |\n"));
+    }
+    out.push('\n');
+}
+
+fn render_cautions(
+    out: &mut String,
+    merged: &VerifySummary,
+    write_target: Option<&str>,
+) {
+    let mut bullets: Vec<String> = Vec::new();
+
+    if let Some(target) = write_target {
+        if target.to_ascii_uppercase().contains("AE3B") {
+            bullets.push("Use **AE3B** for writes (not AE01). Notify on AE3C.".into());
+        }
+    }
+
+    let motor_stop = merged.success_rows.iter().any(|r| {
+        r.sent.eq_ignore_ascii_case("A0 03 00 00 00") && r.id.contains("stop")
+    });
+    let orgasm_stop = merged
+        .success_rows
+        .iter()
+        .any(|r| r.sent.starts_with("A0 06") && r.id.contains("orgasm"));
+    if motor_stop && orgasm_stop {
+        bullets.push(
+            "`A0 03 00 00 00` stops motors but **not** orgasm mode — use `A0 06 00 00 00`."
+                .into(),
         );
     }
-    out.push_str("\n---\n\n");
+
+    for row in &merged.error_rows {
+        if row.id.contains("orgasm") || row.sent.starts_with("A0 05") {
+            bullets.push(format!("`{}` does **not** work on this device.", row.sent));
+        }
+        if row.id.contains("ae01") {
+            bullets.push("AE01 fallback failed — use the primary write channel.".into());
+        }
+    }
+
+    bullets.push("Orgasm without `01` + ~10 Hz repeat behaves like a normal motor hold.".into());
+    bullets.push("Disconnect the official app before sending commands.".into());
+
+    bullets.sort();
+    bullets.dedup();
+
+    out.push_str("## Cautions\n\n");
+    for b in bullets {
+        out.push_str(&format!("- {b}\n"));
+    }
+}
+
+pub fn write_target_from_channel(channel: &str) -> String {
+    match channel.to_ascii_lowercase().as_str() {
+        "ae3b" => "AE3B (`0x0045`)".into(),
+        "ae01" => "AE01".into(),
+        "ffe1" => "FFE1".into(),
+        other => other.to_uppercase(),
+    }
+}
+
+fn load_plan_channel(workdir: &std::path::Path) -> Option<String> {
+    for name in ["verify_plan.json", "verify_plan_extended.json"] {
+        let path = workdir.join(name);
+        if !path.exists() {
+            continue;
+        }
+        let Ok(text) = std::fs::read_to_string(path) else {
+            continue;
+        };
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
+            if let Some(ch) = v.get("channel").and_then(|c| c.as_str()) {
+                return Some(ch.to_string());
+            }
+        }
+    }
+    None
+}
+
+pub fn render_findings_for_workdir(
+    brand: &str,
+    product: &str,
+    summaries: &[VerifySummary],
+    sweep_md: Option<&str>,
+    workdir: &std::path::Path,
+) -> String {
+    let write_target = load_plan_channel(workdir).map(|c| write_target_from_channel(&c));
+    render_findings_strict(
+        brand,
+        product,
+        summaries,
+        sweep_md,
+        write_target.as_deref(),
+    )
 }
 
 #[cfg(test)]
